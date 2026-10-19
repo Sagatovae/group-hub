@@ -1,11 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { matchesQuery, safeUrl, sortMaterials, upcomingDeadlines } from '../src/lib/utils.ts'
+import { matchesQuery, safeUrl, sortMaterials, upcomingDeadlines, moveSubject, normalizeData, isImageAttachment } from '../src/lib/utils.ts'
 import type { Material } from '../src/lib/types.ts'
 
 const material = (overrides: Partial<Material>): Material => ({
   id: '1', subject_id: null, section_id: null, title: 'Лабораторная', body: '',
-  pinned: false, deadline: null, created_at: '2026-10-19T10:00:00Z', attachments: [], ...overrides,
+  pinned: false, deadline: null, created_at: '2026-10-19T10:00:00Z', attachments: [], author: null, ...overrides,
 })
 
 test('external attachments reject executable URLs', () => {
@@ -27,4 +27,24 @@ test('search finds Russian text and attachment names regardless of case', () => 
   assert.equal(matchesQuery(row,' ШАБЛОН '), true)
   assert.equal(matchesQuery(row,'лабораторная'), true)
   assert.equal(matchesQuery(row,'несуществующий'), false)
+})
+
+const subject = (id: string, position: number) => ({id,position,name:id,teacher:'',semester:1,color:'sage'})
+test('reordering preserves subject data and skips filtered items', () => {
+  const original=[subject('a',0),subject('b',1),subject('c',2)]
+  const moved=moveSubject(original,'c',-1,['a','c'])
+  assert.deepEqual(moved.map(s=>s.id),['c','b','a'])
+  assert.deepEqual(moved.map(s=>s.position),[0,1,2])
+  assert.deepEqual(original.map(s=>s.id),['a','b','c'])
+  assert.equal(moveSubject(original,'a',-1),original)
+})
+test('shared order and author survive reading older cached content', () => {
+  const result=normalizeData({subjects:[subject('a',2),subject('b',1)],sections:[],materials:[material({author:'Староста'})]})
+  assert.deepEqual(result.subjects.map(s=>s.id),['b','a'])
+  assert.equal(matchesQuery(result.materials[0],'староста'),true)
+})
+test('image previews recognize raster uploads without rendering SVG as images', () => {
+  assert.equal(isImageAttachment({id:'a',name:'Фото.JPG',url:'https://example.com/a'}),true)
+  assert.equal(isImageAttachment({id:'a',name:'Фото',url:'https://example.com/a',mime_type:'image/webp'}),true)
+  assert.equal(isImageAttachment({id:'a',name:'file.svg',url:'https://example.com/a',mime_type:'image/svg+xml'}),false)
 })

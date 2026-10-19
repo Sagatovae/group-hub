@@ -5,6 +5,7 @@ begin;
 create table public.subjects (
   id uuid primary key default gen_random_uuid(),
   name text not null check (length(trim(name)) between 1 and 120),
+  position integer not null default 0 constraint subjects_position_nonnegative check (position >= 0),
   teacher text not null default '' check (length(teacher) <= 120),
   semester integer not null default 1 check (semester between 1 and 12),
   color text not null default 'sage' check (color in ('sage','blue','peach','lavender'))
@@ -24,6 +25,7 @@ create table public.materials (
   title text not null check (length(trim(title)) between 1 and 180),
   body text not null default '' check (length(body) <= 20000),
   deadline date,
+  author text constraint materials_author_check check (author in ('Староста','Групп.орг','Проф.орг')),
   pinned boolean not null default false,
   created_at timestamptz not null default now(),
   attachments jsonb not null default '[]'::jsonb check (jsonb_typeof(attachments) = 'array'),
@@ -58,12 +60,13 @@ create function public.create_subject(
   subject_color text, section_names text[], section_ids uuid[]
 ) returns void language plpgsql security invoker set search_path = '' as $$
 begin
+  lock table public.subjects in share row exclusive mode;
   if cardinality(section_names) is distinct from cardinality(section_ids)
      or cardinality(section_names) is null or cardinality(section_names) < 1 then
     raise exception 'At least one section and matching IDs are required';
   end if;
-  insert into public.subjects(id, name, teacher, semester, color)
-    values (subject_id, subject_name, subject_teacher, subject_semester, subject_color);
+  insert into public.subjects(id, name, teacher, semester, color, position)
+    values (subject_id, subject_name, subject_teacher, subject_semester, subject_color, (select coalesce(max(position),-1)+1 from public.subjects));
   insert into public.sections(id, subject_id, name, position)
     select section_ids[i], create_subject.subject_id, section_names[i], i - 1
     from generate_subscripts(section_names, 1) as i;
@@ -72,6 +75,25 @@ $$;
 revoke all on function public.create_subject(uuid,text,text,integer,text,text[],uuid[]) from public;
 grant execute on function public.create_subject(uuid,text,text,integer,text,text[],uuid[]) to anon, authenticated;
 
+-- Сохраняем весь порядок одной транзакцией; устаревший список отклоняется.
+create or replace function public.reorder_subjects(subject_ids uuid[]) returns void
+language plpgsql security invoker set search_path = '' as $$
+begin
+  lock table public.subjects in share row exclusive mode;
+  if subject_ids is null
+    or cardinality(subject_ids) <> (select count(*) from public.subjects)
+    or cardinality(subject_ids) <> (select count(distinct id) from unnest(subject_ids) as id)
+    or exists (select 1 from unnest(subject_ids) as requested(id) where not exists (select 1 from public.subjects s where s.id = requested.id)) then
+    raise exception 'Subject list changed; refresh and try again';
+  end if;
+  update public.subjects as s set position = ordered.ordinality::integer - 1
+    from unnest(subject_ids) with ordinality as ordered(id, ordinality)
+    where s.id = ordered.id;
+end;
+$$;
+revoke all on function public.reorder_subjects(uuid[]) from public;
+grant execute on function public.reorder_subjects(uuid[]) to anon, authenticated;
+
 insert into storage.buckets(id, name, public, file_size_limit, allowed_mime_types)
 values ('materials', 'materials', true, 10485760, array[
   'application/pdf', 'application/msword',
@@ -79,7 +101,7 @@ values ('materials', 'materials', true, 10485760, array[
   'application/vnd.ms-powerpoint', 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
   'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
   'text/plain', 'application/zip', 'application/x-zip-compressed',
-  'image/png', 'image/jpeg', 'image/webp'
+  'image/png', 'image/jpeg', 'image/webp', 'image/gif', 'image/avif'
 ]);
 create policy "Shared uploads" on storage.objects for insert to anon, authenticated
   with check (bucket_id = 'materials');

@@ -1,5 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 import type { Attachment, HubData, Material, Section, Subject } from './types'
+import { normalizeData } from './utils'
 
 const url = import.meta.env.VITE_SUPABASE_URL
 const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
@@ -63,20 +64,20 @@ async function readLocalData(): Promise<HubData> {
 }
 
 export async function readData(): Promise<{ data: HubData; cached: boolean }> {
-  if (!supabase) return { data: await readLocalData(), cached: false }
+  if (!supabase) return { data: normalizeData(await readLocalData()), cached: false }
   try {
     const results = await Promise.all([
-      supabase.from('subjects').select('*').order('name'),
+      supabase.from('subjects').select('*').order('position').order('name'),
       supabase.from('sections').select('*').order('position'),
       supabase.from('materials').select('*').order('created_at', { ascending: false }),
     ])
     for (const result of results) if (result.error) throw result.error
-    const data: HubData = { subjects: results[0].data as Subject[], sections: results[1].data as Section[], materials: results[2].data as Material[] }
+    const data = normalizeData({ subjects: results[0].data as Subject[], sections: results[1].data as Section[], materials: results[2].data as Material[] })
     try { await localWrite(snapshotKey, data) } catch { /* Online data remains usable if caching is unavailable. */ }
     return { data, cached: false }
   } catch {
     const cached = await localRead<HubData>(snapshotKey)
-    if (cached) return { data: cached, cached: true }
+    if (cached) return { data: normalizeData(cached), cached: true }
     throw new Error('Не удалось загрузить материалы. Проверьте интернет и настройку базы Supabase.')
   }
 }
@@ -91,10 +92,31 @@ export async function deleteMaterial(id: string): Promise<void> {
   const { error } = await supabase.from('materials').delete().eq('id', id).select('id').single()
   if (error) throw new Error('Не удалось удалить блок.')
 }
-export async function addSubject(subject: Subject, sections: Section[]): Promise<void> {
-  if (!supabase) return
+export async function addSubject(subject: Subject, sections: Section[]): Promise<Subject> {
+  if (!supabase) return subject
   const { error } = await supabase.rpc('create_subject', { subject_id: subject.id, subject_name: subject.name, subject_teacher: subject.teacher, subject_semester: subject.semester, subject_color: subject.color, section_names: sections.map(s => s.name), section_ids: sections.map(s => s.id) })
   if (error) throw new Error('Не удалось создать предмет. Проверьте подключение и установку SQL-схемы.')
+  const result = await supabase.from('subjects').select('*').eq('id',subject.id).single()
+  if (result.error) throw new Error('Предмет создан, но не удалось обновить его данные. Обновите страницу.')
+  return result.data as Subject
+}
+export async function saveSubject(subject: Subject): Promise<Subject> {
+  if (!supabase) return subject
+  const { name, teacher, semester, color } = subject
+  const {data,error} = await supabase.from('subjects').update({name,teacher,semester,color}).eq('id',subject.id).select('*').single()
+  if (error) throw new Error('Не удалось изменить предмет. Проверьте подключение.')
+  return data as Subject
+}
+export async function saveSubjectOrder(subjects: Subject[]): Promise<void> {
+  if (!supabase) return
+  const {error} = await supabase.rpc('reorder_subjects',{subject_ids:subjects.map(s=>s.id)})
+  if (error) throw new Error('Не удалось сохранить порядок. Возможно, список предметов изменился — обновите страницу и повторите.')
+}
+export async function setMaterialPinned(id: string, pinned: boolean): Promise<Material | null> {
+  if (!supabase) return null
+  const {data,error} = await supabase.from('materials').update({pinned}).eq('id',id).select('*').single()
+  if (error) throw new Error('Не удалось изменить закрепление объявления.')
+  return data as Material
 }
 export async function saveSection(section: Section): Promise<void> {
   if (!supabase) return
@@ -106,13 +128,13 @@ export async function uploadFile(file: File): Promise<Attachment> {
   const id = crypto.randomUUID()
   if (!supabase) {
     await localWrite(`file:${id}`, file)
-    return { id, name: file.name, url: `local-file:${id}`, size: file.size, storage_path: `local:${id}` }
+    return { id, name: file.name, url: `local-file:${id}`, size: file.size, storage_path: `local:${id}`, mime_type: file.type }
   }
   const extension = file.name.includes('.') ? file.name.split('.').pop()!.replace(/[^a-zA-Z0-9]/g, '').toLowerCase() : 'bin'
   const path = `${id}.${extension}`
   const { error } = await supabase.storage.from('materials').upload(path, file, { upsert: false })
   if (error) throw new Error(`Не удалось загрузить «${file.name}». Проверьте тип файла, доступное место и настройку хранилища.`)
-  return { id, name: file.name, url: supabase.storage.from('materials').getPublicUrl(path).data.publicUrl, size: file.size, storage_path: path }
+  return { id, name: file.name, url: supabase.storage.from('materials').getPublicUrl(path).data.publicUrl, size: file.size, storage_path: path, mime_type: file.type }
 }
 export async function removeFiles(attachments: Attachment[]): Promise<void> {
   const paths = attachments.filter(a => a.storage_path).map(a => a.storage_path!)
