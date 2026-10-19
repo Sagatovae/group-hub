@@ -7,7 +7,6 @@ const key = import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY
 export const supabase = url && key ? createClient(url, key) : null
 export const isLocal = !supabase
 const snapshotKey = supabase ? `cloud:${url}` : 'local-v2'
-export const MAX_FILE_SIZE = 10 * 1024 * 1024
 
 function openDB(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -124,7 +123,6 @@ export async function saveSection(section: Section): Promise<void> {
   if (error) throw new Error('Не удалось сохранить раздел.')
 }
 export async function uploadFile(file: File): Promise<Attachment> {
-  if (file.size > MAX_FILE_SIZE) throw new Error(`Файл «${file.name}» больше 10 МБ. Добавьте его ссылкой на облако.`)
   const id = crypto.randomUUID()
   if (!supabase) {
     await localWrite(`file:${id}`, file)
@@ -133,7 +131,7 @@ export async function uploadFile(file: File): Promise<Attachment> {
   const extension = file.name.includes('.') ? file.name.split('.').pop()!.replace(/[^a-zA-Z0-9]/g, '').toLowerCase() : 'bin'
   const path = `${id}.${extension}`
   const { error } = await supabase.storage.from('materials').upload(path, file, { upsert: false })
-  if (error) throw new Error(`Не удалось загрузить «${file.name}». Проверьте тип файла, доступное место и настройку хранилища.`)
+  if (error) throw new Error(`Не удалось загрузить «${file.name}». ${error.message || 'Проверьте тип файла и свободное место в хранилище.'}`)
   return { id, name: file.name, url: supabase.storage.from('materials').getPublicUrl(path).data.publicUrl, size: file.size, storage_path: path, mime_type: file.type }
 }
 export async function removeFiles(attachments: Attachment[]): Promise<void> {

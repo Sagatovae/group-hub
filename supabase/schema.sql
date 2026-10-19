@@ -95,7 +95,7 @@ revoke all on function public.reorder_subjects(uuid[]) from public;
 grant execute on function public.reorder_subjects(uuid[]) to anon, authenticated;
 
 insert into storage.buckets(id, name, public, file_size_limit, allowed_mime_types)
-values ('materials', 'materials', true, 10485760, array[
+values ('materials', 'materials', true, null, array[
   'application/pdf', 'application/msword',
   'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
   'application/vnd.ms-powerpoint', 'application/vnd.openxmlformats-officedocument.presentationml.presentation',

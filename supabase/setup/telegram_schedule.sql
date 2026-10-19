@@ -21,7 +21,7 @@ select cron.schedule(
         'x-dispatch-secret', (select decrypted_secret from vault.decrypted_secrets where name = 'telegram_dispatch_secret' limit 1)
       ),
       body := '{}'::jsonb,
-      timeout_milliseconds := 60000
+      timeout_milliseconds := 180000
     );
   $job$
 );

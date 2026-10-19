@@ -2,14 +2,16 @@ import { createClient } from 'npm:@supabase/supabase-js@2'
 
 type Attachment = { name: string; url: string; size?: number; mime_type?: string }
 type Material = { title: string; body: string; author: string | null; attachments: Attachment[]; subject_name?: string | null; section_name?: string | null }
-type Part = { key: string; kind: 'text' | 'photo' | 'document'; text?: string; file?: Attachment }
-type Delivered = Part & { messageId: number }
+type Part = { key: string; kind: 'text' | 'photo' | 'document'; text?: string; caption?: string; file?: Attachment }
+type Receipt = { type: string; size?: number; name?: string; caption?: string }
+type Delivered = Part & { messageId: number; receipt?: Receipt }
 
-function parts(material: Material, storageUrl: string): Part[] {
+function parts(material: Material, storageUrl: string, legacyFormat = false): Part[] {
   const hashtag = material.subject_name
     ? '#' + material.subject_name.normalize('NFKC').replace(/[^\p{L}\p{N}_]+/gu, '_').replace(/^_+|_+$/g, '').slice(0, 80)
     : material.subject_name === null ? '#Объявления' : ''
   const text = [material.title, material.section_name, material.body, material.author, hashtag].filter(Boolean).join('\n\n')
+  const caption = [material.title, hashtag].filter(Boolean).join('\n\n').slice(0, 900)
   const result: Part[] = []
   const characters = Array.from(text)
   for (let i = 0; i < characters.length; i += 1800) {
@@ -19,17 +21,22 @@ function parts(material: Material, storageUrl: string): Part[] {
     const source = new URL(file.url)
     if (!['https:', 'http:'].includes(source.protocol)) throw new DeliveryError('unsupported_attachment_url')
     const stored = source.origin === new URL(storageUrl).origin && source.pathname.startsWith('/storage/v1/object/public/materials/')
-    if (!stored || (file.size || 0) > 10485760) {
+    if (!stored || (file.size || 0) > 50 * 1024 * 1024) {
       result.push({ key: `file:${i}`, kind: 'text', text: `${file.name.slice(0, 180)}\n${file.url.slice(0, 3500)}` })
     } else {
-      const photo = ['image/jpeg', 'image/png'].includes(file.mime_type || '') || (!file.mime_type && /\.(png|jpe?g)$/i.test(source.pathname))
-      result.push({ key: `file:${i}`, kind: photo ? 'photo' : 'document', file })
+      const photo = (['image/jpeg', 'image/png'].includes(file.mime_type || '') || (!file.mime_type && /\.(png|jpe?g)$/i.test(source.pathname))) && typeof file.size === 'number' && file.size <= 10 * 1024 * 1024
+      result.push({ key: `file:${i}`, kind: photo ? 'photo' : 'document', file, ...(legacyFormat ? {} : { caption }) })
     }
+  }
+  const firstFile = result.find(part => part.key === 'file:0' && part.kind !== 'text')
+  if (!legacyFormat && firstFile && text.length <= 900) {
+    firstFile.caption = text
+    return result.filter(part => !part.key.startsWith('text:'))
   }
   return result
 }
 function same(a: Part, b: Part) {
-  return a.kind === b.kind && a.text === b.text &&
+  return a.kind === b.kind && a.text === b.text && a.caption === b.caption &&
     a.file?.url === b.file?.url && a.file?.name === b.file?.name && a.file?.mime_type === b.file?.mime_type
 }
 function synchronized(wanted: Part[], delivered: Delivered[]) {
@@ -53,13 +60,14 @@ Deno.serve(async request => {
   if (claimed.error) return new Response('Queue unavailable', { status: 503 })
   const job = claimed.data?.[0]
   if (!job) return new Response('Queue empty')
+  let lastReceipt: Receipt | undefined
   const api = async (method: string, body: FormData | Record<string, unknown>, existingId?: number): Promise<number> => {
     let response: Response
     try {
       response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
         method: 'POST', body: body instanceof FormData ? body : JSON.stringify(body),
         headers: body instanceof FormData ? undefined : { 'Content-Type': 'application/json' },
-        signal: AbortSignal.timeout(25000),
+        signal: AbortSignal.timeout(90000),
       })
     } catch { throw new DeliveryError('telegram_network_error', 180) }
     const value = await response.json().catch(() => null)
@@ -74,6 +82,11 @@ Deno.serve(async request => {
       }
       throw new DeliveryError(`telegram_${value?.error_code || response.status}`, Math.max(60, value?.parameters?.retry_after || 0))
     }
+    const message = value.result
+    if (message && typeof message === 'object') {
+      lastReceipt = { type: message.document ? 'document' : message.photo ? 'photo' : 'text',
+        size: message.document?.file_size, name: message.document?.file_name, caption: message.caption }
+    }
     return existingId || value.result.message_id
   }
   const checkpoint = async (delivered: Delivered[], complete: boolean) => {
@@ -83,7 +96,7 @@ Deno.serve(async request => {
   }
   try {
     const wanted = parts(job.payload, url)
-    const legacy = job.delivered_parts == null ? parts(job.legacy_payload || job.payload, url) : []
+    const legacy = job.delivered_parts == null ? parts(job.legacy_payload || job.payload, url, true) : []
     let delivered: Delivered[] = job.delivered_parts ?? legacy.slice(0, job.message_ids.length).map((part, i) => ({ ...part, messageId: job.message_ids[i] }))
     // One Telegram mutation per invocation; keep confirmed state for unchanged parts.
     const target = wanted.find(part => !delivered.some(sent => sent.key === part.key && same(sent, part)))
@@ -102,20 +115,23 @@ Deno.serve(async request => {
             text: target.text, link_preview_options: { is_disabled: true },
           }, existing?.messageId)
         } else {
-          const response = await fetch(target.file!.url, { signal: AbortSignal.timeout(15000), redirect: 'error' })
+          const response = await fetch(target.file!.url, { signal: AbortSignal.timeout(45000), redirect: 'error' })
           if (!response.ok) throw new DeliveryError('attachment_unavailable')
           const blob = await response.blob()
-          if (blob.size > 10485760) throw new DeliveryError('attachment_too_large')
+          if (blob.size > 50 * 1024 * 1024) throw new DeliveryError('attachment_too_large')
           const form = new FormData()
           form.set('chat_id', channel)
           if (existing) {
             form.set('message_id', String(existing.messageId))
-            form.set('media', JSON.stringify({ type: target.kind, media: 'attach://upload' }))
+            form.set('media', JSON.stringify({ type: target.kind, media: 'attach://upload', caption: target.caption || '' }))
             form.set('upload', blob, target.file!.name)
-          } else form.set(target.kind, blob, target.file!.name)
+          } else {
+            form.set(target.kind, blob, target.file!.name)
+            if (target.caption) form.set('caption', target.caption)
+          }
           messageId = await api(existing ? 'editMessageMedia' : target.kind === 'photo' ? 'sendPhoto' : 'sendDocument', form, existing?.messageId)
         }
-        delivered = [...delivered.filter(sent => sent.key !== target.key), { ...target, messageId }]
+        delivered = [...delivered.filter(sent => sent.key !== target.key), { ...target, messageId, receipt: lastReceipt || existing?.receipt }]
       } catch (error) {
         if (error instanceof DeliveryError && error.code === 'message_missing' && existing) {
           delivered = delivered.filter(sent => sent.key !== existing.key)
