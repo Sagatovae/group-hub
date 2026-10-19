@@ -97,6 +97,13 @@ export default function App() {
   }, [])
   useEffect(() => { if (!toast) return; const id = setTimeout(() => setToast(''), 5000); return () => clearTimeout(id) }, [toast])
 
+  useEffect(() => {
+    if (!menuOpen) return
+    const closeOnEscape = (event: KeyboardEvent) => { if (event.key === 'Escape') setMenuOpen(false) }
+    document.addEventListener('keydown', closeOnEscape)
+    return () => document.removeEventListener('keydown', closeOnEscape)
+  }, [menuOpen])
+
   const navigate = (next: Page, id?: string) => { location.hash = next === 'subject' ? `subject/${id}` : next; setMenuOpen(false) }
   const changeData = async (next: HubData) => { const normalized = normalizeData(next); if (isLocal) await persistLocal(normalized); setData(normalized) }
   const run = async (action: () => Promise<void>) => {
@@ -142,7 +149,7 @@ export default function App() {
 
   return <div className="app-shell">
     {menuOpen && <button className="sidebar-scrim" aria-label="Закрыть меню" onClick={() => setMenuOpen(false)} />}
-    <aside className={`sidebar ${menuOpen ? 'open' : ''}`}>
+    <aside id="subject-navigation" aria-label="Навигация по предметам" className={`sidebar ${menuOpen ? 'open' : ''}`}><button className="icon-button mobile-sheet-close" onClick={() => setMenuOpen(false)} aria-label="Закрыть список предметов"><X size={20}/></button>
       <a className="brand group-brand" href="#home">ИДБ-2<span className="brand-accent">6</span>-0<span className="brand-accent">9</span></a>
 
       <p className="nav-caption">ПРОСТРАНСТВО</p><nav aria-label="Главная навигация">{navItems.map(({ page: p, name, icon: Icon }) => <button key={p} className={`nav-item ${page === p ? 'active' : ''}`} onClick={() => navigate(p)}><Icon size={19}/><span>{name}</span></button>)}</nav>
@@ -151,7 +158,7 @@ export default function App() {
 
     </aside>
     <div className="main-shell">
-      <header className="topbar"><div className="breadcrumb"><button className="icon-button mobile-menu" aria-label="Открыть меню" onClick={() => setMenuOpen(true)}><Menu size={22}/></button><span>Пространство группы</span><ChevronRight size={14}/><strong>{page === 'subject' ? subject?.name || 'Предмет' : navItems.find(n => n.page === page)?.name}</strong></div><div className="header-controls"><InstallApp/><span className={`mode-pill ${isLocal ? '' : 'live'}`}><span/>{isLocal ? 'Локально' : 'Онлайн'}</span></div></header>
+      <header className="topbar"><div className="breadcrumb"><span>Пространство группы</span><ChevronRight size={14}/><strong>{page === 'subject' ? subject?.name || 'Предмет' : navItems.find(n => n.page === page)?.name}</strong></div><div className="header-controls"><InstallApp/><span className={`mode-pill ${isLocal ? '' : 'live'}`}><span/>{isLocal ? 'Локально' : 'Онлайн'}</span></div></header>
       <main>
         {isLocal && <div className="demo-banner"><span><span className="tiny-dot"/>Материалы сохраняются в этом браузере. Для общего доступа подключите базу данных.</span></div>}
         {cached && <div className="notice"><WifiOff size={18}/>Показана сохранённая копия материалов. Редактирование временно недоступно.<button className="text-button" onClick={() => void load()}>Обновить</button></div>}
@@ -177,6 +184,11 @@ export default function App() {
         <footer className="page-footer"><span>ИДБ-2<span className="brand-accent">6</span>-0<span className="brand-accent">9</span></span><span>Сделано для своих <span className="footer-spark">✳</span></span></footer>
       </main>
     </div>
+    <nav className="mobile-nav-island" aria-label="Мобильная навигация">
+      <button className={page === 'home' && !menuOpen ? 'active' : ''} aria-current={page === 'home' ? 'page' : undefined} onClick={() => navigate('home')}><Bell size={21}/><span>Объявления</span></button>
+      <button className={(page === 'subjects' || page === 'subject') && !menuOpen ? 'active' : ''} aria-current={page === 'subjects' || page === 'subject' ? 'page' : undefined} onClick={() => navigate('subjects')}><BookOpen size={21}/><span>Предметы</span></button>
+      <button className={menuOpen ? 'active' : ''} aria-expanded={menuOpen} aria-controls="subject-navigation" onClick={() => setMenuOpen(!menuOpen)}><Menu size={21}/><span>Список</span></button>
+    </nav>
     {toast && <div className="toast" role="status"><Check size={17}/>{toast}</div>}
     {modal && <Dialog title={modal.kind==='material' ? modal.material ? 'Редактировать блок' : 'Новый блок' : modal.kind==='subject' ? modal.subject ? 'Редактировать предмет' : 'Новый предмет' : modal.kind==='section' ? modal.section ? 'Название раздела' : 'Новый раздел' : 'Удалить блок?'} close={closeModal}>
       {error && <div className="error-box" role="alert">{error}</div>}
