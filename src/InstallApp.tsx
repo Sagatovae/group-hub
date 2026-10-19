@@ -6,36 +6,56 @@ type InstallPrompt = Event & {
   userChoice: Promise<{ outcome: 'accepted' | 'dismissed' }>
 }
 
+const appDisplayModes = ['standalone', 'fullscreen', 'minimal-ui', 'window-controls-overlay']
+function isAppWindow() {
+  return appDisplayModes.some(mode => window.matchMedia(`(display-mode: ${mode})`).matches)
+    || !!(navigator as Navigator & { standalone?: boolean }).standalone
+    || document.referrer.startsWith('android-app://')
+}
+
 export function InstallApp() {
   const [prompt, setPrompt] = useState<InstallPrompt | null>(null)
-  const [installed, setInstalled] = useState(false)
+  const [installed, setInstalled] = useState(isAppWindow)
+  const installedThisSession = useRef(false)
   const [busy, setBusy] = useState(false)
   const dialog = useRef<HTMLDialogElement>(null)
   const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
 
   useEffect(() => {
-    const media = window.matchMedia('(display-mode: standalone)')
-    const sync = () => setInstalled(media.matches || !!(navigator as Navigator & { standalone?: boolean }).standalone)
-    const available = (event: Event) => { event.preventDefault(); setPrompt(event as InstallPrompt) }
-    const complete = () => { setInstalled(true); setPrompt(null); dialog.current?.close() }
+    const media = appDisplayModes.map(mode => window.matchMedia(`(display-mode: ${mode})`))
+    const sync = () => {
+      const hidden = installedThisSession.current || isAppWindow()
+      setInstalled(hidden)
+      if (hidden) { setPrompt(null); dialog.current?.close() }
+    }
+    const available = (event: Event) => {
+      event.preventDefault()
+      if (!isAppWindow() && !installedThisSession.current) setPrompt(event as InstallPrompt)
+    }
+    const complete = () => { installedThisSession.current = true; sync() }
     sync()
-    media.addEventListener('change', sync)
+    media.forEach(query => query.addEventListener('change', sync))
+    document.addEventListener('visibilitychange', sync)
+    window.addEventListener('pageshow', sync)
     window.addEventListener('beforeinstallprompt', available)
     window.addEventListener('appinstalled', complete)
     return () => {
-      media.removeEventListener('change', sync)
+      media.forEach(query => query.removeEventListener('change', sync))
+      document.removeEventListener('visibilitychange', sync)
+      window.removeEventListener('pageshow', sync)
       window.removeEventListener('beforeinstallprompt', available)
       window.removeEventListener('appinstalled', complete)
     }
   }, [])
 
   const install = async () => {
+    if (isAppWindow()) { setInstalled(true); return }
     if (!prompt) { dialog.current?.showModal(); return }
     setBusy(true)
     try {
       await prompt.prompt()
       const choice = await prompt.userChoice
-      if (choice.outcome === 'accepted') setInstalled(true)
+      if (choice.outcome === 'accepted') { installedThisSession.current = true; setInstalled(true) }
     } catch { dialog.current?.showModal() }
     finally { setPrompt(null); setBusy(false) }
   }

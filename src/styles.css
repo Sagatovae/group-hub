@@ -68,3 +68,6 @@
 .notification-enabled{position:absolute;right:6px;top:6px;width:6px;height:6px;border-radius:50%;background:#7b8455;box-shadow:0 0 0 2px white}
 .install-dialog>.button{margin-top:12px}
 @media(max-width:760px){.header-controls{gap:7px}.breadcrumb strong{max-width:110px}.notification-settings{width:36px;height:40px}}
+
+/* Prevent install UI from flashing before React detects an installed app window. */
+@media(display-mode:standalone),(display-mode:fullscreen),(display-mode:minimal-ui),(display-mode:window-controls-overlay){.install-app{display:none}}
