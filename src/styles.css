@@ -71,3 +71,6 @@
 
 /* Prevent install UI from flashing before React detects an installed app window. */
 @media(display-mode:standalone),(display-mode:fullscreen),(display-mode:minimal-ui),(display-mode:window-controls-overlay){.install-app{display:none}}
+
+.recent-feed .subject-link{white-space:normal;line-height:1.5;text-align:left;overflow-wrap:anywhere}
+@media(max-width:760px){.mobile-nav-island{width:min(390px,calc(100% - 24px));gap:3px;padding:6px}.mobile-nav-island>button{font-size:9px}.recent-feed .subject-link{margin-left:0}}

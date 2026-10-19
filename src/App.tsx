@@ -1,7 +1,7 @@
 import { NotificationSettings } from './NotificationSettings'
 import { InstallApp } from './InstallApp'
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import { ArrowDownToLine, ArrowDown, ArrowUp, ArrowUpDown, ArrowRight, Bell, BookOpen, CalendarDays, Check, ChevronRight, File, FolderOpen, Link as LinkIcon, LoaderCircle, Menu, MoreHorizontal, Pencil, Pin, Plus, Search, Trash2, Upload, WifiOff, X } from 'lucide-react'
+import { ArrowDownToLine, ArrowDown, ArrowUp, ArrowUpDown, ArrowRight, Bell, BookOpen, CalendarDays, Check, ChevronRight, Clock3, File, FolderOpen, Link as LinkIcon, LoaderCircle, Menu, MoreHorizontal, Pencil, Pin, Plus, RefreshCw, Search, Trash2, Upload, WifiOff, X } from 'lucide-react'
 import { useRegisterSW } from 'virtual:pwa-register/react'
 import { addSubject, deleteMaterial, localFileUrl, isLocal, persistLocal, readData, removeFiles, saveMaterial, saveSection, saveSubject, saveSubjectOrder, setMaterialPinned, uploadFile } from './lib/storage'
 import { AUTHORS, type Author, type Attachment, type HubData, type Material, type Page, type Section, type Subject } from './lib/types'
@@ -10,12 +10,13 @@ import { formatDate, formatSize, matchesQuery, safeUrl, sortMaterials, moveSubje
 type Modal = { kind: 'material'; material?: Material } | { kind: 'subject'; subject?: Subject } | { kind: 'section'; section?: Section } | { kind: 'delete'; material: Material } | null
 const empty: HubData = { subjects: [], sections: [], materials: [] }
 const navItems: { page: Page; name: string; icon: typeof Bell }[] = [
+  { page: 'recent', name: 'Последнее', icon: Clock3 },
   { page: 'home', name: 'Объявления', icon: Bell }, { page: 'subjects', name: 'Предметы', icon: BookOpen },
 ]
-function readRoute(): { page: Page; subjectId: string | null } {
+function readRoute(): { page: Page; subjectId: string | null; sectionId: string } {
   const route = location.hash.slice(1).split('/')
-  if (route[0] === 'subject' && route[1]) return { page: 'subject', subjectId: route[1] }
-  return { page: ['home', 'subjects'].includes(route[0]) ? route[0] as Page : 'home', subjectId: null }
+  if (route[0] === 'subject' && route[1]) return { page: 'subject', subjectId: route[1], sectionId: route[2] || 'all' }
+  return { page: ['home', 'subjects', 'recent'].includes(route[0]) ? route[0] as Page : 'home', subjectId: null, sectionId: 'all' }
 }
 
 function AttachmentLink({ attachment }: { attachment: Attachment }) {
@@ -64,7 +65,7 @@ function Dialog({ title, close, children }: { title: string; close: () => void; 
 export default function App() {
   const [data, setData] = useState<HubData>(empty)
   const [route, setRoute] = useState(readRoute)
-  const [sectionId, setSectionId] = useState('all')
+  const [sectionId, setSectionId] = useState(() => readRoute().sectionId)
   const [query, setQuery] = useState('')
   const [semester, setSemester] = useState('all')
   const [loading, setLoading] = useState(true)
@@ -92,7 +93,7 @@ export default function App() {
   }
   useEffect(() => { void load() }, [])
   useEffect(() => {
-    const handler = () => { setRoute(readRoute()); setSectionId('all'); setQuery(''); setMenuOpen(false) }
+    const handler = () => { const next = readRoute(); setRoute(next); setSectionId(next.sectionId); setQuery(''); setMenuOpen(false) }
     window.addEventListener('hashchange', handler)
     return () => window.removeEventListener('hashchange', handler)
   }, [])
@@ -105,7 +106,7 @@ export default function App() {
     return () => document.removeEventListener('keydown', closeOnEscape)
   }, [menuOpen])
 
-  const navigate = (next: Page, id?: string) => { location.hash = next === 'subject' ? `subject/${id}` : next; setMenuOpen(false) }
+  const navigate = (next: Page, id?: string, nextSection?: string) => { location.hash = next === 'subject' ? `subject/${id}${nextSection ? `/${nextSection}` : ''}` : next; setMenuOpen(false) }
   const changeData = async (next: HubData) => { const normalized = normalizeData(next); if (isLocal) await persistLocal(normalized); setData(normalized) }
   const run = async (action: () => Promise<void>) => {
     setBusy(true); setError('')
@@ -134,18 +135,22 @@ export default function App() {
   }
   const subjectName = (id: string | null) => data.subjects.find(s => s.id === id)?.name || 'Для всей группы'
   const sectionName = (id: string | null) => data.sections.find(s => s.id === id)?.name || 'Объявление'
-  const visible = sortMaterials(data.materials.filter(m => {
+  const filteredMaterials = data.materials.filter(m => {
     if (page === 'home' && m.subject_id !== null) return false
     if (page === 'subject' && (m.subject_id !== subjectId || sectionId !== 'all' && m.section_id !== sectionId)) return false
-    return matchesQuery(m, query)
-  }))
+    const metadata = page === 'recent' ? `${subjectName(m.subject_id)} ${sectionName(m.section_id)}` : ''
+    return matchesQuery({...m, body:`${m.body} ${metadata}`}, query)
+  })
+  const visible = page === 'recent'
+    ? filteredMaterials.sort((a,b) => Date.parse(b.created_at)-Date.parse(a.created_at) || b.id.localeCompare(a.id))
+    : sortMaterials(filteredMaterials)
   const filteredSubjects = data.subjects.filter(s => (semester === 'all' || s.semester === Number(semester)) && `${s.name} ${s.teacher}`.toLowerCase().includes(query.toLowerCase().trim()))
 
   const materialCard = (m: Material) => <article className={`material-card ${m.pinned ? 'pinned' : ''}`} key={m.id}>
     <div className="card-topline"><span className={`badge ${m.pinned ? 'important' : ''}`}>{m.pinned ? <Pin size={12} /> : <BookOpen size={12} />}{m.pinned ? 'Закреплено' : sectionName(m.section_id)}</span><span className="card-date">{formatDate(m.created_at)}</span></div>
     <h3>{m.title}</h3><p className="material-body">{m.body}</p>
     {!!m.attachments.length && <div className="attachments">{m.attachments.map(a => <AttachmentLink attachment={a} key={a.id} />)}</div>}
-    <div className="card-footer"><span className={m.author ? 'author-label' : ''}>{m.author || 'Материал группы'}</span>{m.subject_id && <button className="subject-link" onClick={() => navigate('subject', m.subject_id!)}>{subjectName(m.subject_id)}<ChevronRight size={13}/></button>}{m.deadline && <span className="deadline-badge"><CalendarDays size={13} />До {formatDate(m.deadline)}</span>}{editable && <div className="card-actions">{m.subject_id === null && <button className={`icon-button ${m.pinned?'selected':''}`} disabled={!!pinningId || orderBusy} onClick={() => void togglePin(m)} aria-pressed={m.pinned} aria-label={`${m.pinned?'Открепить':'Закрепить'}: ${m.title}`}><Pin size={15}/></button>}<button className="icon-button" onClick={() => openModal({ kind: 'material', material: m })} aria-label={`Редактировать: ${m.title}`}><Pencil size={15}/></button><button className="icon-button danger-text" onClick={() => openModal({ kind: 'delete', material: m })} aria-label={`Удалить: ${m.title}`}><Trash2 size={15}/></button></div>}</div>
+    <div className="card-footer"><span className={m.author ? 'author-label' : ''}>{m.author || 'Материал группы'}</span>{(m.subject_id || page === 'recent') && <button className="subject-link" onClick={() => m.subject_id ? navigate('subject', m.subject_id, m.section_id || undefined) : navigate('home')}>{m.subject_id ? `${subjectName(m.subject_id)}${page === 'recent' ? ` · ${sectionName(m.section_id)}` : ''}` : 'Объявления группы'}<ChevronRight size={13}/></button>}{m.deadline && <span className="deadline-badge"><CalendarDays size={13} />До {formatDate(m.deadline)}</span>}{editable && <div className="card-actions">{m.subject_id === null && <button className={`icon-button ${m.pinned?'selected':''}`} disabled={!!pinningId || orderBusy} onClick={() => void togglePin(m)} aria-pressed={m.pinned} aria-label={`${m.pinned?'Открепить':'Закрепить'}: ${m.title}`}><Pin size={15}/></button>}<button className="icon-button" onClick={() => openModal({ kind: 'material', material: m })} aria-label={`Редактировать: ${m.title}`}><Pencil size={15}/></button><button className="icon-button danger-text" onClick={() => openModal({ kind: 'delete', material: m })} aria-label={`Удалить: ${m.title}`}><Trash2 size={15}/></button></div>}</div>
   </article>
 
   return <div className="app-shell">
@@ -165,7 +170,7 @@ export default function App() {
         {cached && <div className="notice"><WifiOff size={18}/>Показана сохранённая копия материалов. Редактирование временно недоступно.<button className="text-button" onClick={() => void load()}>Обновить</button></div>}
         {needRefresh && <div className="notice">Доступна новая версия сайта.<button className="text-button" onClick={() => void updateServiceWorker(true)}>Обновить приложение</button></div>}
         {error && !modal && <div className="error-box" role="alert">{error}<button className="text-button" onClick={() => void load()}>Повторить</button></div>}
-        {page !== 'home' && <div className="page-heading"><div><div className="eyebrow">{page === 'subject' ? `ПРЕДМЕТ · ${subject?.semester || 1} СЕМЕСТР` : 'УЧЕБНОЕ ПРОСТРАНСТВО'}</div><h1>{page === 'subject' ? subject?.name || 'Предмет не найден' : 'Наши предметы'}</h1><p>{page === 'subject' ? subject?.teacher || 'Выберите предмет в меню' : 'Лекции, задания и полезные материалы — у каждого предмета своё место.'}</p></div>{editable && <div className="page-actions">{page==='subject' && subject && <button className="button outline" onClick={()=>openModal({kind:'subject',subject})}><Pencil size={16}/>Редактировать предмет</button>}<button className="button primary" onClick={() => openModal(page === 'subjects' ? {kind:'subject'} : {kind:'material'})}><Plus size={18}/>{page === 'subjects' ? 'Добавить предмет' : 'Добавить блок'}</button></div>}</div>}
+        {page !== 'home' && <div className="page-heading"><div><div className="eyebrow">{page === 'subject' ? `ПРЕДМЕТ · ${subject?.semester || 1} СЕМЕСТР` : 'УЧЕБНОЕ ПРОСТРАНСТВО'}</div><h1>{page === 'subject' ? subject?.name || 'Предмет не найден' : page === 'recent' ? 'Последние публикации' : 'Наши предметы'}</h1><p>{page === 'subject' ? subject?.teacher || 'Выберите предмет в меню' : page === 'recent' ? 'Объявления и материалы по всем предметам — от новых к старым.' : 'Лекции, задания и полезные материалы — у каждого предмета своё место.'}</p></div>{editable && <div className="page-actions">{page==='subject' && subject && <button className="button outline" onClick={()=>openModal({kind:'subject',subject})}><Pencil size={16}/>Редактировать предмет</button>}<button className="button primary" onClick={() => openModal(page === 'subjects' ? {kind:'subject'} : {kind:'material'})}><Plus size={18}/>{page === 'subjects' ? 'Добавить предмет' : 'Добавить блок'}</button></div>}</div>}
         {loading ? <div className="loading"><LoaderCircle className="spin" size={24}/>Загружаем пространство…</div> : <>
 
         {page === 'subjects' ? <>
@@ -175,10 +180,10 @@ export default function App() {
             {editable && <div className="subject-card-actions"><button className="button outline" onClick={()=>openModal({kind:'subject',subject:s})} aria-label={`Редактировать предмет: ${s.name}`}><Pencil size={14}/>Редактировать</button>{reordering && <OrderControls subject={s} disabled={orderBusy || !!pinningId} first={i===0} last={i===filteredSubjects.length-1} move={direction=>void reorder(s.id,direction,filteredSubjects.map(x=>x.id))}/>}</div>}
           </article>)}</div>
           {!filteredSubjects.length && <div className="empty-state"><BookOpen size={32}/><h3>Предметов пока нет</h3><p>{query ? 'Попробуйте изменить запрос.' : 'Добавьте первый предмет, чтобы разместить учебные материалы.'}</p></div>}
-        </> : <div><section className="feed">
+        </> : <div><section className={`feed ${page === 'recent' ? 'recent-feed' : ''}`}>
           {page === 'subject' && <div className="section-tabs" role="tablist" aria-label="Разделы предмета"><button role="tab" aria-selected={sectionId==='all'} className={sectionId==='all'?'active':''} onClick={()=>setSectionId('all')}>Все материалы</button>{sections.map(s=><button role="tab" aria-selected={sectionId===s.id} className={sectionId===s.id?'active':''} key={s.id} onClick={()=>setSectionId(s.id)}>{s.name}</button>)}{editable && subject && <button aria-label="Добавить раздел" onClick={()=>openModal({kind:'section'})}><Plus size={17}/></button>}</div>}
-          <div className="feed-heading"><div><h2>{page === 'home' ? 'Объявления группы' : page === 'subject' ? sections.find(s=>s.id===sectionId)?.name || 'Все материалы' : 'Все материалы'}</h2><span className="count-chip">{visible.length}</span>{editable && page==='subject' && sectionId!=='all' && <button className="icon-button" aria-label="Переименовать раздел" onClick={()=>openModal({kind:'section',section:sections.find(s=>s.id===sectionId)})}><Pencil size={15}/></button>}</div>{page === 'home' && editable ? <button className="button primary" onClick={() => openModal({kind:'material'})}><Plus size={18}/>Добавить блок</button> : <span className="sort-label">Сначала новые<MoreHorizontal size={18}/></span>}</div>
-          <label className="search-input feed-search"><Search size={17}/><input aria-label="Поиск материалов" placeholder="Поиск по материалам и файлам…" value={query} onChange={e=>setQuery(e.target.value)}/>{query && <button className="icon-button" aria-label="Очистить поиск" onClick={()=>setQuery('')}><X size={15}/></button>}</label>
+          <div className="feed-heading"><div><h2>{page === 'home' ? 'Объявления группы' : page === 'recent' ? 'Лента группы' : page === 'subject' ? sections.find(s=>s.id===sectionId)?.name || 'Все материалы' : 'Все материалы'}</h2><span className="count-chip">{visible.length}</span>{editable && page==='subject' && sectionId!=='all' && <button className="icon-button" aria-label="Переименовать раздел" onClick={()=>openModal({kind:'section',section:sections.find(s=>s.id===sectionId)})}><Pencil size={15}/></button>}</div>{page === 'home' && editable ? <button className="button primary" onClick={() => openModal({kind:'material'})}><Plus size={18}/>Добавить блок</button> : <span className="sort-label">Сначала новые{page === 'recent' ? <button className="icon-button" onClick={() => void load()} aria-label="Обновить ленту" title="Обновить ленту"><RefreshCw size={17}/></button> : <MoreHorizontal size={18}/>}</span>}</div>
+          <label className="search-input feed-search"><Search size={17}/><input aria-label="Поиск материалов" placeholder={page === 'recent' ? 'Поиск по материалам, предметам и файлам…' : 'Поиск по материалам и файлам…'} value={query} onChange={e=>setQuery(e.target.value)}/>{query && <button className="icon-button" aria-label="Очистить поиск" onClick={()=>setQuery('')}><X size={15}/></button>}</label>
           <div className="materials-list">{visible.map(materialCard)}</div>{!visible.length && <div className="empty-state"><FolderOpen size={34}/><h3>{query ? 'Ничего не нашлось' : 'Здесь пока пусто'}</h3><p>{query ? 'Попробуйте другой запрос.' : 'Добавьте первый блок с объявлением, файлами или ссылками.'}</p>{editable && <button className="button outline" onClick={()=>openModal({kind:'material'})}><Plus size={16}/>Добавить первый блок</button>}</div>}
         </section></div>}
         </>}
@@ -186,6 +191,7 @@ export default function App() {
       </main>
     </div>
     <nav className="mobile-nav-island" aria-label="Мобильная навигация">
+      <button className={page === 'recent' && !menuOpen ? 'active' : ''} aria-current={page === 'recent' ? 'page' : undefined} onClick={() => navigate('recent')}><Clock3 size={21}/><span>Последнее</span></button>
       <button className={page === 'home' && !menuOpen ? 'active' : ''} aria-current={page === 'home' ? 'page' : undefined} onClick={() => navigate('home')}><Bell size={21}/><span>Объявления</span></button>
       <button className={(page === 'subjects' || page === 'subject') && !menuOpen ? 'active' : ''} aria-current={page === 'subjects' || page === 'subject' ? 'page' : undefined} onClick={() => navigate('subjects')}><BookOpen size={21}/><span>Предметы</span></button>
       <button className={menuOpen ? 'active' : ''} aria-expanded={menuOpen} aria-controls="subject-navigation" onClick={() => setMenuOpen(!menuOpen)}><Menu size={21}/><span>Список</span></button>

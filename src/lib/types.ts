@@ -8,4 +8,4 @@ export interface Material {
   body: string; deadline: string | null; pinned: boolean; author: Author | null; created_at: string; attachments: Attachment[]
 }
 export interface HubData { subjects: Subject[]; sections: Section[]; materials: Material[] }
-export type Page = 'home' | 'subjects' | 'subject'
+export type Page = 'home' | 'subjects' | 'subject' | 'recent'
