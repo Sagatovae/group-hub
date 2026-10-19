@@ -17,6 +17,15 @@ jobs:
         with:
           node-version: 24
           cache: npm
+      - name: Require shared database configuration
+        env:
+          VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+          VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.VITE_SUPABASE_PUBLISHABLE_KEY }}
+        run: |
+          if [ -z "$VITE_SUPABASE_URL" ] || [ -z "$VITE_SUPABASE_PUBLISHABLE_KEY" ]; then
+            echo 'Set VITE_SUPABASE_URL and VITE_SUPABASE_PUBLISHABLE_KEY in repository Actions variables before publishing.'
+            exit 1
+          fi
       - run: npm ci
       - run: npm test
       - run: npm run build

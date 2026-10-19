@@ -1,22 +1,6 @@
 -- Выполните один раз в SQL Editor нового проекта Supabase.
--- Материалы и файлы общедоступны; запись разрешена только назначенным администраторам.
+-- Все посетители могут читать и редактировать материалы без входа.
 begin;
-
-create table public.administrators (
-  user_id uuid primary key references auth.users(id) on delete cascade
-);
-alter table public.administrators enable row level security;
-create policy "Read own admin membership" on public.administrators
-  for select to authenticated using (user_id = (select auth.uid()));
-revoke all on public.administrators from anon, authenticated;
-grant select on public.administrators to authenticated;
-
-create function public.is_group_admin() returns boolean
-language sql stable security definer set search_path = '' as $$
-  select exists (select 1 from public.administrators where user_id = (select auth.uid()));
-$$;
-revoke all on function public.is_group_admin() from public;
-grant execute on function public.is_group_admin() to authenticated;
 
 create table public.subjects (
   id uuid primary key default gen_random_uuid(),
@@ -58,15 +42,15 @@ alter table public.materials enable row level security;
 create policy "Public subjects" on public.subjects for select to anon, authenticated using (true);
 create policy "Public sections" on public.sections for select to anon, authenticated using (true);
 create policy "Public materials" on public.materials for select to anon, authenticated using (true);
-create policy "Admin subject writes" on public.subjects for all to authenticated
-  using ((select public.is_group_admin())) with check ((select public.is_group_admin()));
-create policy "Admin section writes" on public.sections for all to authenticated
-  using ((select public.is_group_admin())) with check ((select public.is_group_admin()));
-create policy "Admin material writes" on public.materials for all to authenticated
-  using ((select public.is_group_admin())) with check ((select public.is_group_admin()));
+create policy "Shared subject editing" on public.subjects for all to anon, authenticated
+  using (true) with check (true);
+create policy "Shared section editing" on public.sections for all to anon, authenticated
+  using (true) with check (true);
+create policy "Shared material editing" on public.materials for all to anon, authenticated
+  using (true) with check (true);
 revoke all on public.subjects, public.sections, public.materials from anon, authenticated;
 grant select on public.subjects, public.sections, public.materials to anon, authenticated;
-grant insert, update, delete on public.subjects, public.sections, public.materials to authenticated;
+grant insert, update, delete on public.subjects, public.sections, public.materials to anon, authenticated;
 
 -- Одна транзакция: предмет и все его начальные разделы.
 create function public.create_subject(
@@ -74,7 +58,6 @@ create function public.create_subject(
   subject_color text, section_names text[], section_ids uuid[]
 ) returns void language plpgsql security invoker set search_path = '' as $$
 begin
-  if not public.is_group_admin() then raise insufficient_privilege; end if;
   if cardinality(section_names) is distinct from cardinality(section_ids)
      or cardinality(section_names) is null or cardinality(section_names) < 1 then
     raise exception 'At least one section and matching IDs are required';
@@ -87,7 +70,7 @@ begin
 end;
 $$;
 revoke all on function public.create_subject(uuid,text,text,integer,text,text[],uuid[]) from public;
-grant execute on function public.create_subject(uuid,text,text,integer,text,text[],uuid[]) to authenticated;
+grant execute on function public.create_subject(uuid,text,text,integer,text,text[],uuid[]) to anon, authenticated;
 
 insert into storage.buckets(id, name, public, file_size_limit, allowed_mime_types)
 values ('materials', 'materials', true, 10485760, array[
@@ -98,15 +81,11 @@ values ('materials', 'materials', true, 10485760, array[
   'text/plain', 'application/zip', 'application/x-zip-compressed',
   'image/png', 'image/jpeg', 'image/webp'
 ]);
-create policy "Admin uploads" on storage.objects for insert to authenticated
-  with check (bucket_id = 'materials' and (select public.is_group_admin()));
-create policy "Admin file listing" on storage.objects for select to authenticated
-  using (bucket_id = 'materials' and (select public.is_group_admin()));
-create policy "Admin file deletion" on storage.objects for delete to authenticated
-  using (bucket_id = 'materials' and (select public.is_group_admin()));
+create policy "Shared uploads" on storage.objects for insert to anon, authenticated
+  with check (bucket_id = 'materials');
+create policy "Shared file listing" on storage.objects for select to anon, authenticated
+  using (bucket_id = 'materials');
+create policy "Shared file deletion" on storage.objects for delete to anon, authenticated
+  using (bucket_id = 'materials');
 
 commit;
-
--- Создайте пользователя в Authentication > Users, затем назначьте старосту отдельно:
--- insert into public.administrators(user_id) values ('UUID_ИЗ_AUTH_USERS');
--- Не включайте автоматическое назначение прав всем зарегистрированным пользователям.

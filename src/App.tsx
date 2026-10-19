@@ -1,33 +1,31 @@
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import { ArrowDownToLine, ArrowRight, Bell, BookOpen, Bookmark, CalendarDays, Check, ChevronRight, CircleHelp, File, FolderOpen, GraduationCap, Link as LinkIcon, LoaderCircle, LogIn, LogOut, Menu, MoreHorizontal, Pencil, Pin, Plus, Search, Trash2, Upload, WifiOff, X } from 'lucide-react'
+import { ArrowDownToLine, ArrowRight, Bell, BookOpen, CalendarDays, Check, ChevronRight, File, FolderOpen, Link as LinkIcon, LoaderCircle, Menu, MoreHorizontal, Pencil, Pin, Plus, Search, Trash2, Upload, WifiOff, X } from 'lucide-react'
 import { useRegisterSW } from 'virtual:pwa-register/react'
-import { addSubject, deleteMaterial, demoFileUrl, isDemo, persistDemo, readData, removeFiles, saveMaterial, saveSection, supabase, uploadFile } from './lib/storage'
+import { addSubject, deleteMaterial, localFileUrl, isLocal, persistLocal, readData, removeFiles, saveMaterial, saveSection, uploadFile } from './lib/storage'
 import type { Attachment, HubData, Material, Page, Section, Subject } from './lib/types'
-import { formatDate, formatSize, matchesQuery, safeUrl, sortMaterials, upcomingDeadlines } from './lib/utils'
+import { formatDate, formatSize, matchesQuery, safeUrl, sortMaterials } from './lib/utils'
 
-type Modal = { kind: 'material'; material?: Material } | { kind: 'subject' } | { kind: 'section'; section?: Section } | { kind: 'login' } | { kind: 'delete'; material: Material } | { kind: 'help' } | null
+type Modal = { kind: 'material'; material?: Material } | { kind: 'subject' } | { kind: 'section'; section?: Section } | { kind: 'delete'; material: Material } | null
 const empty: HubData = { subjects: [], sections: [], materials: [] }
 const navItems: { page: Page; name: string; icon: typeof Bell }[] = [
   { page: 'home', name: 'Объявления', icon: Bell }, { page: 'subjects', name: 'Предметы', icon: BookOpen },
-  { page: 'files', name: 'Все файлы', icon: FolderOpen }, { page: 'saved', name: 'Избранное', icon: Bookmark },
 ]
-function readSaved(): string[] { try { const value: unknown = JSON.parse(localStorage.getItem('group-hub-saved') || '[]'); return Array.isArray(value) ? value.filter((id): id is string => typeof id === 'string') : [] } catch { return [] } }
 function readRoute(): { page: Page; subjectId: string | null } {
   const route = location.hash.slice(1).split('/')
   if (route[0] === 'subject' && route[1]) return { page: 'subject', subjectId: route[1] }
-  return { page: ['home', 'subjects', 'files', 'saved'].includes(route[0]) ? route[0] as Page : 'home', subjectId: null }
+  return { page: ['home', 'subjects'].includes(route[0]) ? route[0] as Page : 'home', subjectId: null }
 }
 
 function AttachmentLink({ attachment }: { attachment: Attachment }) {
   const [url, setUrl] = useState<string | null>(null)
   useEffect(() => {
     let active = true, objectUrl: string | null = null
-    if (attachment.url.startsWith('demo-file:')) {
-      demoFileUrl(attachment.url.slice(10)).then(value => { objectUrl = value; if (active) setUrl(value); else if (value) URL.revokeObjectURL(value) }).catch(() => setUrl(null))
+    if (attachment.url.startsWith('local-file:')) {
+      localFileUrl(attachment.url.slice(11)).then(value => { objectUrl = value; if (active) setUrl(value); else if (value) URL.revokeObjectURL(value) }).catch(() => setUrl(null))
     } else setUrl(safeUrl(attachment.url))
     return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl) }
   }, [attachment.url])
-  return <a className={`attachment ${!url ? 'disabled' : ''}`} href={url || undefined} target="_blank" rel="noopener noreferrer" download={attachment.url.startsWith('demo-file:') ? attachment.name : undefined} aria-disabled={!url}>
+  return <a className={`attachment ${!url ? 'disabled' : ''}`} href={url || undefined} target="_blank" rel="noopener noreferrer" download={attachment.url.startsWith('local-file:') ? attachment.name : undefined} aria-disabled={!url}>
     <span className="file-icon"><File size={19} /></span><span><strong>{attachment.name}</strong><small>{url ? formatSize(attachment.size) : 'Файл недоступен'}</small></span><ArrowDownToLine size={17} />
   </a>
 }
@@ -67,9 +65,6 @@ export default function App() {
   const [cached, setCached] = useState(false)
   const [error, setError] = useState('')
   const [toast, setToast] = useState('')
-  const [saved, setSaved] = useState(readSaved)
-  const [admin, setAdmin] = useState(false)
-  const [signedIn, setSignedIn] = useState(false)
   const [menuOpen, setMenuOpen] = useState(false)
   const [modal, setModal] = useState<Modal>(null)
   const [busy, setBusy] = useState(false)
@@ -77,7 +72,7 @@ export default function App() {
   const { page, subjectId } = route
   const subject = data.subjects.find(s => s.id === subjectId)
   const sections = data.sections.filter(s => s.subject_id === subjectId).sort((a,b) => a.position-b.position)
-  const editable = admin && !cached
+  const editable = !cached && !loading
   const currentRequest = useRef(0)
   const load = async () => {
     const request = ++currentRequest.current
@@ -92,88 +87,64 @@ export default function App() {
     window.addEventListener('hashchange', handler)
     return () => window.removeEventListener('hashchange', handler)
   }, [])
-  useEffect(() => {
-    if (!supabase) return
-    let active = true
-    let revision = 0
-    const client = supabase
-    const { data: listener } = client.auth.onAuthStateChange((_event, session) => {
-      const check = ++revision
-      setSignedIn(!!session); setAdmin(false)
-      if (session) {
-        void client.from('administrators').select('user_id').eq('user_id', session.user.id).maybeSingle().then(({ data: row }) => {
-          if (active && check === revision) setAdmin(!!row)
-        })
-      }
-    })
-    return () => { active = false; listener.subscription.unsubscribe() }
-  }, [])
   useEffect(() => { if (!toast) return; const id = setTimeout(() => setToast(''), 5000); return () => clearTimeout(id) }, [toast])
 
   const navigate = (next: Page, id?: string) => { location.hash = next === 'subject' ? `subject/${id}` : next; setMenuOpen(false) }
-  const changeData = async (next: HubData) => { if (isDemo) await persistDemo(next); setData(next) }
-  const toggleSaved = (id: string) => {
-    const next = saved.includes(id) ? saved.filter(s => s !== id) : [...saved, id]
-    setSaved(next)
-    try { localStorage.setItem('group-hub-saved', JSON.stringify(next)) } catch { setToast('Избранное изменено, но браузер не разрешил сохранить его после закрытия.') }
-  }
+  const changeData = async (next: HubData) => { if (isLocal) await persistLocal(next); setData(next) }
   const run = async (action: () => Promise<void>) => {
     setBusy(true); setError('')
     try { await action(); setModal(null) } catch (e) { setError((e as Error).message || 'Не удалось выполнить действие.') } finally { setBusy(false) }
   }
   const openModal = (next: Modal) => { setError(''); setModal(next) }
   const closeModal = () => { if (!busy) { setModal(null); setError('') } }
-  const deadlines = upcomingDeadlines(data.materials)
   const subjectName = (id: string | null) => data.subjects.find(s => s.id === id)?.name || 'Для всей группы'
   const sectionName = (id: string | null) => data.sections.find(s => s.id === id)?.name || 'Объявление'
   const visible = sortMaterials(data.materials.filter(m => {
     if (page === 'home' && m.subject_id !== null) return false
     if (page === 'subject' && (m.subject_id !== subjectId || sectionId !== 'all' && m.section_id !== sectionId)) return false
-    if (page === 'saved' && !saved.includes(m.id)) return false
-    if (page === 'files' && !m.attachments.length) return false
     return matchesQuery(m, query)
   }))
   const filteredSubjects = data.subjects.filter(s => (semester === 'all' || s.semester === Number(semester)) && `${s.name} ${s.teacher}`.toLowerCase().includes(query.toLowerCase().trim()))
 
   const materialCard = (m: Material) => <article className={`material-card ${m.pinned ? 'pinned' : ''}`} key={m.id}>
-    <div className="card-topline"><span className={`badge ${m.pinned ? 'important' : ''}`}>{m.pinned ? <Pin size={12} /> : <BookOpen size={12} />}{m.pinned ? 'Закреплено' : sectionName(m.section_id)}</span><span className="card-date">{formatDate(m.created_at)}</span><button className={`icon-button bookmark-button ${saved.includes(m.id) ? 'selected' : ''}`} onClick={() => toggleSaved(m.id)} aria-label={saved.includes(m.id) ? `Убрать из избранного: ${m.title}` : `В избранное: ${m.title}`} aria-pressed={saved.includes(m.id)}><Bookmark size={18} fill={saved.includes(m.id) ? 'currentColor' : 'none'} /></button></div>
+    <div className="card-topline"><span className={`badge ${m.pinned ? 'important' : ''}`}>{m.pinned ? <Pin size={12} /> : <BookOpen size={12} />}{m.pinned ? 'Закреплено' : sectionName(m.section_id)}</span><span className="card-date">{formatDate(m.created_at)}</span></div>
     <h3>{m.title}</h3><p className="material-body">{m.body}</p>
     {!!m.attachments.length && <div className="attachments">{m.attachments.map(a => <AttachmentLink attachment={a} key={a.id} />)}</div>}
-    <div className="card-footer"><span className="author-avatar">С</span><span>Староста группы</span>{m.subject_id && <button className="subject-link" onClick={() => navigate('subject', m.subject_id!)}>{subjectName(m.subject_id)}<ChevronRight size={13}/></button>}{m.deadline && <span className="deadline-badge"><CalendarDays size={13} />До {formatDate(m.deadline)}</span>}{editable && <div className="card-actions"><button className="icon-button" onClick={() => openModal({ kind: 'material', material: m })} aria-label={`Редактировать: ${m.title}`}><Pencil size={15}/></button><button className="icon-button danger-text" onClick={() => openModal({ kind: 'delete', material: m })} aria-label={`Удалить: ${m.title}`}><Trash2 size={15}/></button></div>}</div>
+    <div className="card-footer"><span>Материал группы</span>{m.subject_id && <button className="subject-link" onClick={() => navigate('subject', m.subject_id!)}>{subjectName(m.subject_id)}<ChevronRight size={13}/></button>}{m.deadline && <span className="deadline-badge"><CalendarDays size={13} />До {formatDate(m.deadline)}</span>}{editable && <div className="card-actions"><button className="icon-button" onClick={() => openModal({ kind: 'material', material: m })} aria-label={`Редактировать: ${m.title}`}><Pencil size={15}/></button><button className="icon-button danger-text" onClick={() => openModal({ kind: 'delete', material: m })} aria-label={`Удалить: ${m.title}`}><Trash2 size={15}/></button></div>}</div>
   </article>
 
   return <div className="app-shell">
     {menuOpen && <button className="sidebar-scrim" aria-label="Закрыть меню" onClick={() => setMenuOpen(false)} />}
     <aside className={`sidebar ${menuOpen ? 'open' : ''}`}>
-      <a className="brand" href="#home"><span className="brand-mark">Г<span>●</span></span><span>группа<span className="brand-dot">.</span></span></a>
-      <div className="group-switch"><span className="group-avatar"><GraduationCap size={20}/></span><div><strong>ИДБ-26-09</strong><small>Учебное пространство</small></div><span className="status-dot"/></div>
-      <p className="nav-caption">ПРОСТРАНСТВО</p><nav aria-label="Главная навигация">{navItems.map(({ page: p, name, icon: Icon }) => <button key={p} className={`nav-item ${page === p ? 'active' : ''}`} onClick={() => navigate(p)}><Icon size={19}/><span>{name}</span>{p === 'saved' && saved.length > 0 && <span className="nav-count">{saved.length}</span>}</button>)}</nav>
-      <div className="subject-nav-heading"><p className="nav-caption">МОИ ПРЕДМЕТЫ</p>{editable && <button className="icon-button" onClick={() => openModal({ kind: 'subject' })} aria-label="Добавить предмет"><Plus size={15}/></button>}</div>
+      <a className="brand group-brand" href="#home">ИДБ-2<span className="brand-accent">6</span>-0<span className="brand-accent">9</span></a>
+
+      <p className="nav-caption">ПРОСТРАНСТВО</p><nav aria-label="Главная навигация">{navItems.map(({ page: p, name, icon: Icon }) => <button key={p} className={`nav-item ${page === p ? 'active' : ''}`} onClick={() => navigate(p)}><Icon size={19}/><span>{name}</span></button>)}</nav>
+      <div className="subject-nav-heading"><p className="nav-caption">ПРЕДМЕТЫ</p>{editable && <button className="icon-button" onClick={() => openModal({ kind: 'subject' })} aria-label="Добавить предмет"><Plus size={15}/></button>}</div>
       <nav className="subjects-nav" aria-label="Предметы">{data.subjects.slice(0,8).map(s => <button key={s.id} className={`nav-item small ${subjectId === s.id ? 'active' : ''}`} onClick={() => navigate('subject',s.id)}><span className={`subject-dot ${s.color}`}/><span>{s.name}</span></button>)}{!data.subjects.length && <span className="sidebar-empty">Предметов пока нет</span>}</nav>
-      <div className="sidebar-bottom"><div className="study-note"><BookOpen size={21}/><strong>Всё нужное — под рукой</strong><p>Учитесь вместе.<br/>Не теряйте важное.</p></div><button className="help-link" onClick={() => openModal({ kind: 'help' })}><CircleHelp size={17}/>Как это работает<ArrowRight size={15}/></button></div>
+
     </aside>
     <div className="main-shell">
-      <header className="topbar"><div className="breadcrumb"><button className="icon-button mobile-menu" aria-label="Открыть меню" onClick={() => setMenuOpen(true)}><Menu size={22}/></button><span>Пространство группы</span><ChevronRight size={14}/><strong>{page === 'subject' ? subject?.name || 'Предмет' : navItems.find(n => n.page === page)?.name}</strong></div><div className="header-controls"><span className={`mode-pill ${isDemo ? '' : 'live'}`}><span/>{isDemo ? 'Демоверсия' : 'Онлайн'}</span>{isDemo ? <button className={`button ${admin ? 'subtle' : 'outline'} compact`} onClick={() => { setAdmin(!admin); setToast(admin ? 'Режим просмотра' : 'Деморедактор: изменения сохраняются в этом браузере') }}>{admin ? <Check size={15}/> : <Pencil size={15}/>}{admin ? 'Редактор включён' : 'Попробовать редактор'}</button> : signedIn ? <button className="button outline compact" onClick={() => void supabase!.auth.signOut().then(({error}) => { if(error) setToast('Не удалось выйти. Проверьте интернет.') })}><LogOut size={15}/>Выйти</button> : <button className="button outline compact" onClick={() => openModal({ kind: 'login' })}><LogIn size={15}/>Вход старосты</button>}</div></header>
+      <header className="topbar"><div className="breadcrumb"><button className="icon-button mobile-menu" aria-label="Открыть меню" onClick={() => setMenuOpen(true)}><Menu size={22}/></button><span>Пространство группы</span><ChevronRight size={14}/><strong>{page === 'subject' ? subject?.name || 'Предмет' : navItems.find(n => n.page === page)?.name}</strong></div><div className="header-controls"><span className={`mode-pill ${isLocal ? '' : 'live'}`}><span/>{isLocal ? 'Локально' : 'Онлайн'}</span></div></header>
       <main>
-        {isDemo && <div className="demo-banner"><span><span className="tiny-dot"/>Это демоверсия. Материалы — примеры, изменения видны только в этом браузере.</span><button onClick={() => openModal({kind:'help'})}>Подробнее<ArrowRight size={13}/></button></div>}
+        {isLocal && <div className="demo-banner"><span><span className="tiny-dot"/>Материалы сохраняются в этом браузере. Для общего доступа подключите базу данных.</span></div>}
         {cached && <div className="notice"><WifiOff size={18}/>Показана сохранённая копия материалов. Редактирование временно недоступно.<button className="text-button" onClick={() => void load()}>Обновить</button></div>}
         {needRefresh && <div className="notice">Доступна новая версия сайта.<button className="text-button" onClick={() => void updateServiceWorker(true)}>Обновить приложение</button></div>}
         {error && !modal && <div className="error-box" role="alert">{error}<button className="text-button" onClick={() => void load()}>Повторить</button></div>}
-        <div className="page-heading"><div><div className="eyebrow">{page === 'subject' ? `ПРЕДМЕТ · ${subject?.semester || 1} СЕМЕСТР` : 'УЧЕБНОЕ ПРОСТРАНСТВО'}</div><h1>{page === 'home' ? 'На связи, группа' : page === 'subject' ? subject?.name || 'Предмет не найден' : page === 'subjects' ? 'Наши предметы' : page === 'files' ? 'Все файлы' : 'Избранное'}{page === 'home' && <span className="heading-asterisk">✳</span>}</h1><p>{page === 'home' ? 'Важные новости и материалы, чтобы ничего не пропустить.' : page === 'subject' ? subject?.teacher || 'Выберите предмет в меню' : page === 'subjects' ? 'Лекции, задания и полезные материалы — у каждого предмета своё место.' : page === 'files' ? 'Все вложения группы и предметов в одном месте.' : 'Материалы, которые вы сохранили на этом устройстве.'}</p></div>{editable && <button className="button primary" onClick={() => openModal(page === 'subjects' ? {kind:'subject'} : {kind:'material'})}><Plus size={18}/>{page === 'subjects' ? 'Добавить предмет' : 'Добавить блок'}</button>}</div>
+        {page !== 'home' && <div className="page-heading"><div><div className="eyebrow">{page === 'subject' ? `ПРЕДМЕТ · ${subject?.semester || 1} СЕМЕСТР` : 'УЧЕБНОЕ ПРОСТРАНСТВО'}</div><h1>{page === 'subject' ? subject?.name || 'Предмет не найден' : 'Наши предметы'}</h1><p>{page === 'subject' ? subject?.teacher || 'Выберите предмет в меню' : 'Лекции, задания и полезные материалы — у каждого предмета своё место.'}</p></div>{editable && <button className="button primary" onClick={() => openModal(page === 'subjects' ? {kind:'subject'} : {kind:'material'})}><Plus size={18}/>{page === 'subjects' ? 'Добавить предмет' : 'Добавить блок'}</button>}</div>}
         {loading ? <div className="loading"><LoaderCircle className="spin" size={24}/>Загружаем пространство…</div> : <>
-        {page === 'home' && <div className="stats-grid"><button onClick={() => navigate('subjects')}><span className="stat-icon sage"><BookOpen size={21}/></span><span><strong>{data.subjects.length}</strong><small>предмета в пространстве</small></span><ArrowRight size={17}/></button><button onClick={() => navigate('files')}><span className="stat-icon peach"><FolderOpen size={21}/></span><span><strong>{data.materials.reduce((n,m)=>n+m.attachments.length,0)}</strong><small>файлов и полезных ссылок</small></span><ArrowRight size={17}/></button><div><span className="stat-icon lavender"><CalendarDays size={21}/></span><span><strong>{deadlines.length}</strong><small>предстоящих дедлайна</small></span></div></div>}
-        {page === 'subjects' ? <><div className="content-toolbar"><label className="search-input"><Search size={17}/><input aria-label="Поиск предметов" placeholder="Найти предмет…" value={query} onChange={e=>setQuery(e.target.value)}/></label><select aria-label="Семестр" value={semester} onChange={e=>setSemester(e.target.value)}><option value="all">Все семестры</option>{[...new Set(data.subjects.map(s=>s.semester))].sort((a,b)=>a-b).map(s=><option key={s} value={s}>{s} семестр</option>)}</select></div><div className="subject-grid">{filteredSubjects.map((s,i)=><button className="subject-card" key={s.id} onClick={()=>navigate('subject',s.id)}><div className={`subject-cover ${s.color}`}><span className="subject-symbol">{['∑','</>','φ','Aa'][i%4]}</span><span className="semester-pill">{s.semester} семестр</span></div><div className="subject-card-content"><h3>{s.name}</h3><p>{s.teacher || 'Преподаватель не указан'}</p><div><span>{data.materials.filter(m=>m.subject_id===s.id).length} материалов</span><ArrowRight size={18}/></div></div></button>)}</div>{!filteredSubjects.length && <div className="empty-state"><BookOpen size={32}/><h3>Предметов пока нет</h3><p>{query ? 'Попробуйте изменить запрос.' : 'Староста может добавить первый предмет.'}</p></div>}</> : <div className={page === 'home' ? 'content-columns' : ''}><section className="feed">
+
+        {page === 'subjects' ? <><div className="content-toolbar"><label className="search-input"><Search size={17}/><input aria-label="Поиск предметов" placeholder="Найти предмет…" value={query} onChange={e=>setQuery(e.target.value)}/></label><select aria-label="Семестр" value={semester} onChange={e=>setSemester(e.target.value)}><option value="all">Все семестры</option>{[...new Set(data.subjects.map(s=>s.semester))].sort((a,b)=>a-b).map(s=><option key={s} value={s}>{s} семестр</option>)}</select></div><div className="subject-grid">{filteredSubjects.map((s,i)=><button className="subject-card" key={s.id} onClick={()=>navigate('subject',s.id)}><div className={`subject-cover ${s.color}`}><span className="subject-symbol">{['∑','</>','φ','Aa'][i%4]}</span><span className="semester-pill">{s.semester} семестр</span></div><div className="subject-card-content"><h3>{s.name}</h3><p>{s.teacher || 'Преподаватель не указан'}</p><div><span>{data.materials.filter(m=>m.subject_id===s.id).length} материалов</span><ArrowRight size={18}/></div></div></button>)}</div>{!filteredSubjects.length && <div className="empty-state"><BookOpen size={32}/><h3>Предметов пока нет</h3><p>{query ? 'Попробуйте изменить запрос.' : 'Добавьте первый предмет, чтобы разместить учебные материалы.'}</p></div>}</> : <div><section className="feed">
           {page === 'subject' && <div className="section-tabs" role="tablist" aria-label="Разделы предмета"><button role="tab" aria-selected={sectionId==='all'} className={sectionId==='all'?'active':''} onClick={()=>setSectionId('all')}>Все материалы</button>{sections.map(s=><button role="tab" aria-selected={sectionId===s.id} className={sectionId===s.id?'active':''} key={s.id} onClick={()=>setSectionId(s.id)}>{s.name}</button>)}{editable && subject && <button aria-label="Добавить раздел" onClick={()=>openModal({kind:'section'})}><Plus size={17}/></button>}</div>}
-          <div className="feed-heading"><div><h2>{page === 'home' ? 'Объявления группы' : page === 'subject' ? sections.find(s=>s.id===sectionId)?.name || 'Все материалы' : page === 'files' ? 'Файлы и ссылки' : 'Сохранённые блоки'}</h2><span className="count-chip">{visible.length}</span>{editable && page==='subject' && sectionId!=='all' && <button className="icon-button" aria-label="Переименовать раздел" onClick={()=>openModal({kind:'section',section:sections.find(s=>s.id===sectionId)})}><Pencil size={15}/></button>}</div><span className="sort-label">Сначала новые<MoreHorizontal size={18}/></span></div>
+          <div className="feed-heading"><div><h2>{page === 'home' ? 'Объявления группы' : page === 'subject' ? sections.find(s=>s.id===sectionId)?.name || 'Все материалы' : 'Все материалы'}</h2><span className="count-chip">{visible.length}</span>{editable && page==='subject' && sectionId!=='all' && <button className="icon-button" aria-label="Переименовать раздел" onClick={()=>openModal({kind:'section',section:sections.find(s=>s.id===sectionId)})}><Pencil size={15}/></button>}</div>{page === 'home' && editable ? <button className="button primary" onClick={() => openModal({kind:'material'})}><Plus size={18}/>Добавить блок</button> : <span className="sort-label">Сначала новые<MoreHorizontal size={18}/></span>}</div>
           <label className="search-input feed-search"><Search size={17}/><input aria-label="Поиск материалов" placeholder="Поиск по материалам и файлам…" value={query} onChange={e=>setQuery(e.target.value)}/>{query && <button className="icon-button" aria-label="Очистить поиск" onClick={()=>setQuery('')}><X size={15}/></button>}</label>
-          <div className="materials-list">{visible.map(materialCard)}</div>{!visible.length && <div className="empty-state"><FolderOpen size={34}/><h3>{query ? 'Ничего не нашлось' : 'Здесь пока пусто'}</h3><p>{query ? 'Попробуйте другой запрос.' : page === 'saved' ? 'Нажмите на закладку у нужного блока — он появится здесь.' : 'Когда староста добавит материалы, они появятся здесь.'}</p>{editable && page!=='saved' && <button className="button outline" onClick={()=>openModal({kind:'material'})}><Plus size={16}/>Добавить первый блок</button>}</div>}
-        </section>{page === 'home' && <aside className="right-column"><section className="deadlines-panel"><div className="panel-heading"><h2>Ближайшие дедлайны</h2><CalendarDays size={18}/></div>{deadlines.slice(0,4).map(m=><button className="deadline-item" key={m.id} onClick={()=>navigate(m.subject_id ? 'subject' : 'home',m.subject_id || undefined)}><span className="date-tile"><strong>{new Date(`${m.deadline}T12:00:00`).getDate()}</strong><small>{new Intl.DateTimeFormat('ru',{month:'short'}).format(new Date(`${m.deadline}T12:00:00`))}</small></span><span><strong>{m.title}</strong><small>{subjectName(m.subject_id)}</small></span></button>)}{!deadlines.length && <p className="muted panel-empty">Пока без срочных заданий. Можно выдохнуть.</p>}<div className="panel-footnote"><span className="tiny-dot"/>Дедлайны из учебных материалов</div></section><section className="quick-subjects"><div className="panel-heading"><h2>Быстрый переход</h2><button className="icon-button" aria-label="Все предметы" onClick={()=>navigate('subjects')}><ArrowRight size={17}/></button></div>{data.subjects.slice(0,4).map(s=><button key={s.id} onClick={()=>navigate('subject',s.id)}><span className={`mini-subject ${s.color}`}><BookOpen size={16}/></span><span>{s.name}</span><ChevronRight size={15}/></button>)}</section><div className="little-note"><span>✳</span><p>Большие дела начинаются<br/>с маленького конспекта.</p></div></aside>}</div>}
+          <div className="materials-list">{visible.map(materialCard)}</div>{!visible.length && <div className="empty-state"><FolderOpen size={34}/><h3>{query ? 'Ничего не нашлось' : 'Здесь пока пусто'}</h3><p>{query ? 'Попробуйте другой запрос.' : 'Добавьте первый блок с объявлением, файлами или ссылками.'}</p>{editable && <button className="button outline" onClick={()=>openModal({kind:'material'})}><Plus size={16}/>Добавить первый блок</button>}</div>}
+        </section></div>}
         </>}
-        <footer className="page-footer"><span>Группа. Место, где учиться проще.</span><span>Сделано для своих <span className="footer-spark">✳</span></span></footer>
+        <footer className="page-footer"><span>ИДБ-2<span className="brand-accent">6</span>-0<span className="brand-accent">9</span></span><span>Сделано для своих <span className="footer-spark">✳</span></span></footer>
       </main>
     </div>
     {toast && <div className="toast" role="status"><Check size={17}/>{toast}</div>}
-    {modal && <Dialog title={modal.kind==='material' ? modal.material ? 'Редактировать блок' : 'Новый блок' : modal.kind==='subject' ? 'Новый предмет' : modal.kind==='section' ? modal.section ? 'Название раздела' : 'Новый раздел' : modal.kind==='login' ? 'Вход для старосты' : modal.kind==='delete' ? 'Удалить блок?' : 'Ваше учебное пространство'} close={closeModal}>
+    {modal && <Dialog title={modal.kind==='material' ? modal.material ? 'Редактировать блок' : 'Новый блок' : modal.kind==='subject' ? 'Новый предмет' : modal.kind==='section' ? modal.section ? 'Название раздела' : 'Новый раздел' : 'Удалить блок?'} close={closeModal}>
       {error && <div className="error-box" role="alert">{error}</div>}
       {modal.kind==='material' && <MaterialForm initial={modal.material} data={data} subjectId={page==='subject'?subjectId:null} sectionId={sectionId} busy={busy} cancel={closeModal} submit={(material, files)=>void run(async()=>{
         const uploaded: Attachment[] = []
@@ -184,16 +155,16 @@ export default function App() {
           await changeData({...data,materials:[complete,...data.materials.filter(m=>m.id!==complete.id)]})
         } catch(e) { try { await removeFiles(uploaded) } catch { /* Preserve the original error. */ } throw e }
         const removed = modal.material?.attachments.filter(a=>!material.attachments.some(b=>a.id===b.id)) || []
-        try { await removeFiles(removed); setToast(isDemo?'Блок сохранён в этом браузере':'Блок опубликован') } catch(e) { setToast((e as Error).message) }
+        try { await removeFiles(removed); setToast(isLocal?'Блок сохранён в этом браузере':'Блок опубликован') } catch(e) { setToast((e as Error).message) }
       })}/>}
       {modal.kind==='subject' && <SubjectForm busy={busy} cancel={closeModal} submit={s=>void run(async()=>{
         const newSections = ['Лекции','Семинары','Домашние задания','Лабораторные','Прочее'].map((name,position)=>({id:crypto.randomUUID(),subject_id:s.id,name,position}))
         await addSubject(s,newSections); await changeData({...data,subjects:[...data.subjects,s],sections:[...data.sections,...newSections]}); navigate('subject',s.id); setToast('Предмет добавлен')
       })}/>}
       {modal.kind==='section' && <form onSubmit={e=>{e.preventDefault(); const form=new FormData(e.currentTarget); const name=String(form.get('name')).trim(); if(!name) return; void run(async()=>{ if(!subjectId) return; const s: Section={id:modal.section?.id || crypto.randomUUID(),subject_id:subjectId,name,position:modal.section?.position ?? sections.length}; await saveSection(s); await changeData({...data,sections:[...data.sections.filter(x=>x.id!==s.id),s]}); setToast('Раздел сохранён') }) }}><label className="field">Название<input name="name" required maxLength={60} defaultValue={modal.section?.name} placeholder="Например, подготовка к экзамену"/></label><FormActions busy={busy} cancel={closeModal}/></form>}
-      {modal.kind==='login' && <form onSubmit={e=>{e.preventDefault(); const f=new FormData(e.currentTarget); void run(async()=>{const {error}=await supabase!.auth.signInWithPassword({email:String(f.get('email')),password:String(f.get('password'))}); if(error) throw new Error('Не удалось войти. Проверьте почту и пароль.'); setToast('Вход выполнен. Права редактирования назначает владелец проекта.')})}}><p className="form-note">Учётную запись старосты создаёт владелец сайта. Студентам для просмотра вход не нужен.</p><label className="field">Почта<input name="email" type="email" autoComplete="username" required/></label><label className="field">Пароль<input name="password" type="password" autoComplete="current-password" required/></label><FormActions busy={busy} cancel={closeModal} label="Войти"/></form>}
+
       {modal.kind==='delete' && <><p className="form-note">Блок «{modal.material.title}» и загруженные в него файлы будут удалены. Внешние файлы по ссылкам останутся в облаке.</p><div className="form-actions"><button className="button outline" disabled={busy} onClick={closeModal}>Отмена</button><button className="button danger" disabled={busy} onClick={()=>void run(async()=>{await deleteMaterial(modal.material.id); await changeData({...data,materials:data.materials.filter(m=>m.id!==modal.material.id)}); try{await removeFiles(modal.material.attachments);setToast('Блок удалён')}catch{setToast('Блок удалён, но файлы нужно убрать из хранилища вручную.')} })}>{busy?<LoaderCircle className="spin" size={17}/>:<Trash2 size={17}/>}Удалить блок</button></div></>}
-      {modal.kind==='help' && <div className="help-content"><div className="help-illustration"><GraduationCap size={44}/></div><p>Объявления — для новостей всей группы. В предметах находятся лекции, домашние задания, лабораторные и другие разделы.</p><p>Закладка у блока добавляет его в избранное на этом устройстве. Загруженные файлы и внешние ссылки открываются из блока.</p>{isDemo?<div className="notice stacked"><strong>Сейчас открыт деморежим</strong><span>Редактор доступен без пароля. Его изменения и файлы сохраняются только в вашем браузере. Для совместной работы нужно подключить Supabase по инструкции в README проекта.</span></div>:<p>Редактировать материалы могут только назначенные старосты. Материалы этого пространства доступны всем по ссылке.</p>}<p>После установки PWA сохранённые тексты можно читать без интернета. Для открытия файлов и внешних ссылок обычно нужно подключение.</p><button className="button primary" onClick={closeModal}>Понятно<Check size={16}/></button></div>}
+
     </Dialog>}
   </div>
 }

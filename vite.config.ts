@@ -11,7 +11,7 @@ export default defineConfig(({ mode }) => {
       registerType: 'prompt',
       includeAssets: ['favicon.svg', 'icon-192.png', 'icon-512.png'],
       manifest: {
-        name: 'Группа — учебное пространство', short_name: 'Группа', lang: 'ru',
+        name: 'ИДБ-26-09 — учебное пространство', short_name: 'ИДБ-26-09', lang: 'ru',
         description: 'Объявления, предметы и учебные материалы вашей группы',
         theme_color: '#41644a', background_color: '#f7f8f5', display: 'standalone',
         start_url: base, scope: base,

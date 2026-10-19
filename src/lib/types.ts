@@ -6,4 +6,4 @@ export interface Material {
   body: string; deadline: string | null; pinned: boolean; created_at: string; attachments: Attachment[]
 }
 export interface HubData { subjects: Subject[]; sections: Section[]; materials: Material[] }
-export type Page = 'home' | 'subjects' | 'files' | 'saved' | 'subject'
+export type Page = 'home' | 'subjects' | 'subject'
