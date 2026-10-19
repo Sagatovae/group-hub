@@ -63,3 +63,8 @@
   .sidebar .subjects-nav{margin-top:10px}
   .toast{bottom:calc(100px + env(safe-area-inset-bottom,0px))}
 }
+
+.notification-settings{position:relative;width:40px;height:40px;border:1px solid var(--border);border-radius:10px;background:#fff}
+.notification-enabled{position:absolute;right:6px;top:6px;width:6px;height:6px;border-radius:50%;background:#7b8455;box-shadow:0 0 0 2px white}
+.install-dialog>.button{margin-top:12px}
+@media(max-width:760px){.header-controls{gap:7px}.breadcrumb strong{max-width:110px}.notification-settings{width:36px;height:40px}}

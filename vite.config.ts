@@ -9,7 +9,7 @@ export default defineConfig(({ mode }) => {
     base,
     plugins: [react(), VitePWA({
       registerType: 'prompt',
-      includeAssets: ['favicon.svg', 'icon-192.png', 'icon-512.png'],
+      includeAssets: ['favicon.svg', 'icon-192.png', 'icon-512.png', 'push-events.js'],
       manifest: {
         name: 'ИДБ-26-09 — учебное пространство', short_name: 'ИДБ-26-09', lang: 'ru',
         description: 'Объявления, предметы и учебные материалы вашей группы',
@@ -24,7 +24,7 @@ export default defineConfig(({ mode }) => {
           { src: 'icon-512.png', sizes: '512x512', type: 'image/png', purpose: 'any maskable' },
         ],
       },
-      workbox: { globPatterns: ['**/*.{js,css,html,svg,png,woff2}'], navigateFallback: 'index.html' },
+      workbox: { importScripts: ['push-events.js'], globPatterns: ['**/*.{js,css,html,svg,png,woff2}'], navigateFallback: 'index.html' },
     })],
   }
 })

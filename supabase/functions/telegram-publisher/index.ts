@@ -1,12 +1,15 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
 type Attachment = { name: string; url: string; size?: number; mime_type?: string }
-type Material = { title: string; body: string; author: string | null; attachments: Attachment[] }
+type Material = { title: string; body: string; author: string | null; attachments: Attachment[]; subject_name?: string | null; section_name?: string | null }
 type Part = { key: string; kind: 'text' | 'photo' | 'document'; text?: string; file?: Attachment }
 type Delivered = Part & { messageId: number }
 
 function parts(material: Material, storageUrl: string): Part[] {
-  const text = [material.title, material.body, material.author].filter(Boolean).join('\n\n')
+  const hashtag = material.subject_name
+    ? '#' + material.subject_name.normalize('NFKC').replace(/[^\p{L}\p{N}_]+/gu, '_').replace(/^_+|_+$/g, '').slice(0, 80)
+    : material.subject_name === null ? '#Объявления' : ''
+  const text = [material.title, material.section_name, material.body, material.author, hashtag].filter(Boolean).join('\n\n')
   const result: Part[] = []
   const characters = Array.from(text)
   for (let i = 0; i < characters.length; i += 1800) {
