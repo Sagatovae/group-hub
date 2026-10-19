@@ -1,0 +1,2 @@
+[functions.telegram-publisher]
+verify_jwt = false
