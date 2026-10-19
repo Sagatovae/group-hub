@@ -2,18 +2,36 @@ import { createClient } from 'npm:@supabase/supabase-js@2'
 
 type Attachment = { name: string; url: string; size?: number; mime_type?: string }
 type Material = { title: string; body: string; author: string | null; attachments: Attachment[] }
-type Part = { text: string } | { file: Attachment }
+type Part = { key: string; kind: 'text' | 'photo' | 'document'; text?: string; file?: Attachment }
+type Delivered = Part & { messageId: number }
 
-function parts(material: Material): Part[] {
+function parts(material: Material, storageUrl: string): Part[] {
   const text = [material.title, material.body, material.author].filter(Boolean).join('\n\n')
   const result: Part[] = []
-  // Leave room below Telegram's 4096-character limit; split by Unicode code points.
   const characters = Array.from(text)
-  for (let i = 0; i < characters.length; i += 1800) result.push({ text: characters.slice(i, i + 1800).join('') })
-  for (const file of material.attachments || []) result.push({ file })
+  for (let i = 0; i < characters.length; i += 1800) {
+    result.push({ key: `text:${i / 1800}`, kind: 'text', text: characters.slice(i, i + 1800).join('') })
+  }
+  for (const [i, file] of (material.attachments || []).entries()) {
+    const source = new URL(file.url)
+    if (!['https:', 'http:'].includes(source.protocol)) throw new DeliveryError('unsupported_attachment_url')
+    const stored = source.origin === new URL(storageUrl).origin && source.pathname.startsWith('/storage/v1/object/public/materials/')
+    if (!stored || (file.size || 0) > 10485760) {
+      result.push({ key: `file:${i}`, kind: 'text', text: `${file.name.slice(0, 180)}\n${file.url.slice(0, 3500)}` })
+    } else {
+      const photo = ['image/jpeg', 'image/png'].includes(file.mime_type || '') || (!file.mime_type && /\.(png|jpe?g)$/i.test(source.pathname))
+      result.push({ key: `file:${i}`, kind: photo ? 'photo' : 'document', file })
+    }
+  }
   return result
 }
-
+function same(a: Part, b: Part) {
+  return a.kind === b.kind && a.text === b.text &&
+    a.file?.url === b.file?.url && a.file?.name === b.file?.name && a.file?.mime_type === b.file?.mime_type
+}
+function synchronized(wanted: Part[], delivered: Delivered[]) {
+  return wanted.length === delivered.length && wanted.every(part => delivered.some(sent => sent.key === part.key && same(sent, part)))
+}
 class DeliveryError extends Error {
   constructor(public code: string, public delay = 60) { super(code) }
 }
@@ -32,11 +50,7 @@ Deno.serve(async request => {
   if (claimed.error) return new Response('Queue unavailable', { status: 503 })
   const job = claimed.data?.[0]
   if (!job) return new Response('Queue empty')
-  const update = async (values: Record<string, unknown>) => {
-    const result = await db.from('telegram_outbox').update(values).eq('id', job.id).eq('lease_token', job.lease_token).select('id').single()
-    if (result.error) throw new DeliveryError('queue_checkpoint_failed', 180)
-  }
-  const api = async (method: string, body: FormData | Record<string, unknown>) => {
+  const api = async (method: string, body: FormData | Record<string, unknown>, existingId?: number): Promise<number> => {
     let response: Response
     try {
       response = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
@@ -46,47 +60,73 @@ Deno.serve(async request => {
       })
     } catch { throw new DeliveryError('telegram_network_error', 180) }
     const value = await response.json().catch(() => null)
-    if (!response.ok || !value?.ok) throw new DeliveryError(`telegram_${value?.error_code || response.status}`, Math.max(60, value?.parameters?.retry_after || 0))
-    return value.result.message_id as number
+    if (!response.ok || !value?.ok) {
+      const description = String(value?.description || '')
+      if (existingId && value?.error_code === 400) {
+        if (method.startsWith('edit') && description.includes('message is not modified')) return existingId
+        if (description.includes('message to edit not found') || description.includes('message to delete not found')) {
+          if (method === 'deleteMessage') return existingId
+          throw new DeliveryError('message_missing', 3)
+        }
+      }
+      throw new DeliveryError(`telegram_${value?.error_code || response.status}`, Math.max(60, value?.parameters?.retry_after || 0))
+    }
+    return existingId || value.result.message_id
+  }
+  const checkpoint = async (delivered: Delivered[], complete: boolean) => {
+    const result = await db.rpc('checkpoint_telegram_delivery', { job_id: job.id, token: job.lease_token,
+      expected_revision: job.revision, parts: delivered, complete })
+    if (result.error) throw new DeliveryError('queue_checkpoint_failed', 180)
   }
   try {
-    const items = parts(job.payload)
-    // One Telegram request per invocation avoids flooding the channel.
-    const part = items[job.next_part]
-    if (!part) { await update({ sent_at: new Date().toISOString(), lease_until: null }); return new Response('Delivered') }
-    let messageId: number
-    if ('text' in part) {
-      messageId = await api('sendMessage', { chat_id: channel, text: part.text, link_preview_options: { is_disabled: true } })
+    const wanted = parts(job.payload, url)
+    const legacy = job.delivered_parts == null ? parts(job.legacy_payload || job.payload, url) : []
+    let delivered: Delivered[] = job.delivered_parts ?? legacy.slice(0, job.message_ids.length).map((part, i) => ({ ...part, messageId: job.message_ids[i] }))
+    // One Telegram mutation per invocation; keep confirmed state for unchanged parts.
+    const target = wanted.find(part => !delivered.some(sent => sent.key === part.key && same(sent, part)))
+    const existing = target ? delivered.find(sent => sent.key === target.key) : delivered.find(sent => !wanted.some(part => part.key === sent.key))
+    if (!target || (existing && (existing.kind === 'text') !== (target.kind === 'text'))) {
+      if (existing) {
+        await api('deleteMessage', { chat_id: channel, message_id: existing.messageId }, existing.messageId)
+        delivered = delivered.filter(sent => sent.key !== existing.key)
+      }
     } else {
-      const file = part.file
-      const source = new URL(file.url)
-      const storage = new URL(url)
-      // Fetch only this project's public material bucket; never arbitrary visitor URLs.
-      const stored = source.origin === storage.origin && source.pathname.startsWith('/storage/v1/object/public/materials/')
-      if (!stored || (file.size || 0) > 10485760) {
-        if (source.protocol !== 'https:' && source.protocol !== 'http:') throw new DeliveryError('unsupported_attachment_url')
-        messageId = await api('sendMessage', { chat_id: channel, text: `${file.name.slice(0, 180)}\n${file.url.slice(0, 3500)}`, link_preview_options: { is_disabled: true } })
-      } else {
-        const response = await fetch(source, { signal: AbortSignal.timeout(15000), redirect: 'error' })
-        if (!response.ok) throw new DeliveryError('attachment_unavailable')
-        const blob = await response.blob()
-        if (blob.size > 10485760) throw new DeliveryError('attachment_too_large')
-        const photo = ['image/jpeg', 'image/png'].includes(file.mime_type || blob.type)
-        const form = new FormData()
-        form.set('chat_id', channel)
-        form.set(photo ? 'photo' : 'document', blob, file.name)
-        messageId = await api(photo ? 'sendPhoto' : 'sendDocument', form)
+      let messageId: number
+      try {
+        if (target.kind === 'text') {
+          messageId = await api(existing ? 'editMessageText' : 'sendMessage', {
+            chat_id: channel, ...(existing ? { message_id: existing.messageId } : {}),
+            text: target.text, link_preview_options: { is_disabled: true },
+          }, existing?.messageId)
+        } else {
+          const response = await fetch(target.file!.url, { signal: AbortSignal.timeout(15000), redirect: 'error' })
+          if (!response.ok) throw new DeliveryError('attachment_unavailable')
+          const blob = await response.blob()
+          if (blob.size > 10485760) throw new DeliveryError('attachment_too_large')
+          const form = new FormData()
+          form.set('chat_id', channel)
+          if (existing) {
+            form.set('message_id', String(existing.messageId))
+            form.set('media', JSON.stringify({ type: target.kind, media: 'attach://upload' }))
+            form.set('upload', blob, target.file!.name)
+          } else form.set(target.kind, blob, target.file!.name)
+          messageId = await api(existing ? 'editMessageMedia' : target.kind === 'photo' ? 'sendPhoto' : 'sendDocument', form, existing?.messageId)
+        }
+        delivered = [...delivered.filter(sent => sent.key !== target.key), { ...target, messageId }]
+      } catch (error) {
+        if (error instanceof DeliveryError && error.code === 'message_missing' && existing) {
+          delivered = delivered.filter(sent => sent.key !== existing.key)
+        } else throw error
       }
     }
-    const next = job.next_part + 1
-    await update({ next_part: next, message_ids: [...job.message_ids, messageId], attempts: 0, last_error: null,
-      sent_at: next === items.length ? new Date().toISOString() : null,
-      available_at: new Date(Date.now() + 3000).toISOString(), lease_until: null })
-    return new Response('Sent')
+    await checkpoint(delivered, synchronized(wanted, delivered))
+    return new Response('Synchronized')
   } catch (error) {
     const failure = error instanceof DeliveryError ? error : new DeliveryError('delivery_failed')
-    // Never put Telegram tokens, remote error bodies or signed URLs in logs.
-    try { await update({ last_error: failure.code, available_at: new Date(Date.now() + failure.delay * 1000).toISOString(), lease_until: null }) } catch { /* Lease expiration allows recovery. */ }
+    // Do not log Telegram tokens, remote response bodies or signed URLs.
+    await db.from('telegram_outbox').update({ last_error: failure.code,
+      available_at: new Date(Date.now() + failure.delay * 1000).toISOString(), lease_until: null,
+    }).eq('id', job.id).eq('lease_token', job.lease_token)
     return new Response('Delivery postponed', { status: 503 })
   }
 })
