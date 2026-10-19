@@ -1,0 +1,112 @@
+-- Выполните один раз в SQL Editor нового проекта Supabase.
+-- Материалы и файлы общедоступны; запись разрешена только назначенным администраторам.
+begin;
+
+create table public.administrators (
+  user_id uuid primary key references auth.users(id) on delete cascade
+);
+alter table public.administrators enable row level security;
+create policy "Read own admin membership" on public.administrators
+  for select to authenticated using (user_id = (select auth.uid()));
+revoke all on public.administrators from anon, authenticated;
+grant select on public.administrators to authenticated;
+
+create function public.is_group_admin() returns boolean
+language sql stable security definer set search_path = '' as $$
+  select exists (select 1 from public.administrators where user_id = (select auth.uid()));
+$$;
+revoke all on function public.is_group_admin() from public;
+grant execute on function public.is_group_admin() to authenticated;
+
+create table public.subjects (
+  id uuid primary key default gen_random_uuid(),
+  name text not null check (length(trim(name)) between 1 and 120),
+  teacher text not null default '' check (length(teacher) <= 120),
+  semester integer not null default 1 check (semester between 1 and 12),
+  color text not null default 'sage' check (color in ('sage','blue','peach','lavender'))
+);
+create table public.sections (
+  id uuid primary key default gen_random_uuid(),
+  subject_id uuid not null references public.subjects(id) on delete cascade,
+  name text not null check (length(trim(name)) between 1 and 60),
+  position integer not null default 0 check (position >= 0),
+  unique (id, subject_id),
+  unique (subject_id, name)
+);
+create table public.materials (
+  id uuid primary key default gen_random_uuid(),
+  subject_id uuid references public.subjects(id) on delete cascade,
+  section_id uuid,
+  title text not null check (length(trim(title)) between 1 and 180),
+  body text not null default '' check (length(body) <= 20000),
+  deadline date,
+  pinned boolean not null default false,
+  created_at timestamptz not null default now(),
+  attachments jsonb not null default '[]'::jsonb check (jsonb_typeof(attachments) = 'array'),
+  constraint material_location check ((subject_id is null) = (section_id is null)),
+  constraint section_belongs_to_subject foreign key (section_id, subject_id)
+    references public.sections(id, subject_id) on delete cascade
+);
+create index materials_subject_idx on public.materials(subject_id);
+create index materials_section_idx on public.materials(section_id);
+create index materials_created_idx on public.materials(created_at desc);
+create index materials_deadline_idx on public.materials(deadline) where deadline is not null;
+
+alter table public.subjects enable row level security;
+alter table public.sections enable row level security;
+alter table public.materials enable row level security;
+create policy "Public subjects" on public.subjects for select to anon, authenticated using (true);
+create policy "Public sections" on public.sections for select to anon, authenticated using (true);
+create policy "Public materials" on public.materials for select to anon, authenticated using (true);
+create policy "Admin subject writes" on public.subjects for all to authenticated
+  using ((select public.is_group_admin())) with check ((select public.is_group_admin()));
+create policy "Admin section writes" on public.sections for all to authenticated
+  using ((select public.is_group_admin())) with check ((select public.is_group_admin()));
+create policy "Admin material writes" on public.materials for all to authenticated
+  using ((select public.is_group_admin())) with check ((select public.is_group_admin()));
+revoke all on public.subjects, public.sections, public.materials from anon, authenticated;
+grant select on public.subjects, public.sections, public.materials to anon, authenticated;
+grant insert, update, delete on public.subjects, public.sections, public.materials to authenticated;
+
+-- Одна транзакция: предмет и все его начальные разделы.
+create function public.create_subject(
+  subject_id uuid, subject_name text, subject_teacher text, subject_semester integer,
+  subject_color text, section_names text[], section_ids uuid[]
+) returns void language plpgsql security invoker set search_path = '' as $$
+begin
+  if not public.is_group_admin() then raise insufficient_privilege; end if;
+  if cardinality(section_names) is distinct from cardinality(section_ids)
+     or cardinality(section_names) is null or cardinality(section_names) < 1 then
+    raise exception 'At least one section and matching IDs are required';
+  end if;
+  insert into public.subjects(id, name, teacher, semester, color)
+    values (subject_id, subject_name, subject_teacher, subject_semester, subject_color);
+  insert into public.sections(id, subject_id, name, position)
+    select section_ids[i], create_subject.subject_id, section_names[i], i - 1
+    from generate_subscripts(section_names, 1) as i;
+end;
+$$;
+revoke all on function public.create_subject(uuid,text,text,integer,text,text[],uuid[]) from public;
+grant execute on function public.create_subject(uuid,text,text,integer,text,text[],uuid[]) to authenticated;
+
+insert into storage.buckets(id, name, public, file_size_limit, allowed_mime_types)
+values ('materials', 'materials', true, 10485760, array[
+  'application/pdf', 'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-powerpoint', 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  'application/vnd.ms-excel', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  'text/plain', 'application/zip', 'application/x-zip-compressed',
+  'image/png', 'image/jpeg', 'image/webp'
+]);
+create policy "Admin uploads" on storage.objects for insert to authenticated
+  with check (bucket_id = 'materials' and (select public.is_group_admin()));
+create policy "Admin file listing" on storage.objects for select to authenticated
+  using (bucket_id = 'materials' and (select public.is_group_admin()));
+create policy "Admin file deletion" on storage.objects for delete to authenticated
+  using (bucket_id = 'materials' and (select public.is_group_admin()));
+
+commit;
+
+-- Создайте пользователя в Authentication > Users, затем назначьте старосту отдельно:
+-- insert into public.administrators(user_id) values ('UUID_ИЗ_AUTH_USERS');
+-- Не включайте автоматическое назначение прав всем зарегистрированным пользователям.
