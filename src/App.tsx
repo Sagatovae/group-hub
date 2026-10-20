@@ -3,6 +3,7 @@ import { InstallApp } from './InstallApp'
 import { MaterialFrame } from './MaterialFrame'
 import { PageBackground } from './PageBackground'
 import { useReading } from './lib/reading'
+import { ContentLoading, LoadingDots, useStartupScreen } from './Loading'
 import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
 import { ArrowDownToLine, ArrowDown, ArrowUp, ArrowUpDown, ArrowRight, Bell, BookOpen, CalendarDays, Check, ChevronRight, Clock3, File, FolderOpen, Link as LinkIcon, LoaderCircle, Menu, MoreHorizontal, Pencil, Pin, Plus, RefreshCw, Search, Trash2, Upload, WifiOff, X } from 'lucide-react'
 import { useRegisterSW } from 'virtual:pwa-register/react'
@@ -25,17 +26,19 @@ function readRoute(): { page: Page; subjectId: string | null; sectionId: string 
 function AttachmentLink({ attachment }: { attachment: Attachment }) {
   const [url, setUrl] = useState<string | null>(null)
   const [imageFailed, setImageFailed] = useState(false)
+  const [imageReady, setImageReady] = useState(false)
   const image = isImageAttachment(attachment) && !imageFailed
   useEffect(() => {
     let active = true, objectUrl: string | null = null
     setImageFailed(false)
+    setImageReady(false)
     if (attachment.url.startsWith('local-file:')) {
       localFileUrl(attachment.url.slice(11)).then(value => { objectUrl = value; if (active) setUrl(value); else if (value) URL.revokeObjectURL(value) }).catch(() => setUrl(null))
     } else setUrl(safeUrl(attachment.url))
     return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl) }
   }, [attachment.url])
   return <a className={`attachment ${image ? 'image-attachment' : ''} ${!url ? 'disabled' : ''}`} href={url || undefined} target="_blank" rel="noopener noreferrer" download={attachment.url.startsWith('local-file:') ? attachment.name : undefined} aria-disabled={!url}>
-    {image && url && <img src={url} alt={attachment.name} loading="lazy" decoding="async" onError={() => setImageFailed(true)} />}
+    {image && url && <span className={`image-preview ${imageReady ? 'is-loaded' : ''}`}><img src={url} alt={attachment.name} loading="lazy" decoding="async" onLoad={() => setImageReady(true)} onError={() => setImageFailed(true)} /></span>}
     <span className="attachment-caption"><span className="file-icon"><File size={19} /></span><span><strong>{attachment.name}</strong><small>{url ? formatSize(attachment.size) : 'Файл недоступен'}</small></span><ArrowDownToLine size={17} /></span>
   </a>
 }
@@ -72,12 +75,14 @@ export default function App() {
   const [query, setQuery] = useState('')
   const [semester, setSemester] = useState('all')
   const [loading, setLoading] = useState(true)
+  const appReady = useStartupScreen(loading)
   const [cached, setCached] = useState(false)
   const [error, setError] = useState('')
   const [toast, setToast] = useState('')
   const [menuOpen, setMenuOpen] = useState(false)
   const [modal, setModal] = useState<Modal>(null)
   const [busy, setBusy] = useState(false)
+  const [busyLabel, setBusyLabel] = useState('Сохраняем…')
   const [reordering, setReordering] = useState(false)
   const [orderBusy, setOrderBusy] = useState(false)
   const [pinningId, setPinningId] = useState<string | null>(null)
@@ -149,7 +154,7 @@ export default function App() {
   }, [targetMaterial, page, subjectId, sectionId, loading])
   const changeData = async (next: HubData) => { dataVersion.current++; const normalized = normalizeData(next); if (isLocal) await persistLocal(normalized); setData(normalized) }
   const run = async (action: () => Promise<void>) => {
-    setBusy(true); setError('')
+    setBusy(true); setBusyLabel('Сохраняем…'); setError('')
     try { await action(); setModal(null) } catch (e) { setError((e as Error).message || 'Не удалось выполнить действие.') } finally { setBusy(false) }
   }
   const openModal = (next: Modal) => { setError(''); setModal(next) }
@@ -194,7 +199,7 @@ export default function App() {
   }
   const newBadge = (count: number | undefined) => count ? <span className="new-count">Новое: {count}</span> : null
 
-  const materialCard = (m: Material) => <MaterialFrame key={m.id} id={m.id} pinned={m.pinned} unread={!read.has(m.id)} active={!modal && !menuOpen && !notificationsOpen} onRead={markRead}>
+  const materialCard = (m: Material) => <MaterialFrame key={m.id} id={m.id} pinned={m.pinned} unread={!read.has(m.id)} active={appReady && !modal && !menuOpen && !notificationsOpen} onRead={markRead}>
     <div className="card-topline"><span className={`badge ${m.pinned ? 'important' : ''}`}>{m.pinned ? <Pin size={12} /> : <BookOpen size={12} />}{m.pinned ? 'Закреплено' : sectionName(m.section_id)}</span>{!read.has(m.id) && <span className="new-count">Новое</span>}<span className="card-date">{formatDate(m.created_at)}</span></div>
     <h3>{m.title}</h3><p className="material-body">{m.body}</p>
     {!!m.attachments.length && <div className="attachments">{m.attachments.map(a => <AttachmentLink attachment={a} key={a.id} />)}</div>}
@@ -213,14 +218,15 @@ export default function App() {
 
     </aside>
     <div className="main-shell">
-      <header className="topbar"><div className="breadcrumb"><span>Пространство группы</span><ChevronRight size={14}/><strong>{page === 'subject' ? subject?.name || 'Предмет' : navItems.find(n => n.page === page)?.name}</strong></div><div className="header-controls"><NotificationSettings data={data} read={read} onRead={markRead} onOpenMaterial={openMaterial} onOpenChange={setNotificationsOpen}/><InstallApp/><span className={`mode-pill ${isLocal ? '' : 'live'}`}><span/>{isLocal ? 'Локально' : 'Онлайн'}</span></div></header>
+      <header className="topbar"><div className="breadcrumb"><span>Пространство группы</span><ChevronRight size={14}/><strong>{page === 'subject' ? subject?.name || 'Предмет' : navItems.find(n => n.page === page)?.name}</strong></div><div className="header-controls"><NotificationSettings ready={appReady} data={data} read={read} onRead={markRead} onOpenMaterial={openMaterial} onOpenChange={setNotificationsOpen}/><InstallApp/><span className={`mode-pill ${isLocal ? '' : 'live'}`}><span/>{isLocal ? 'Локально' : 'Онлайн'}</span></div></header>
+      {loading && appReady && <div className="loading-topline" role="progressbar" aria-label="Обновляем материалы"/>}
       <main key={`${page}-${subjectId}`} className="page-enter">
         {isLocal && <div className="demo-banner"><span><span className="tiny-dot"/>Материалы сохраняются в этом браузере. Для общего доступа подключите базу данных.</span></div>}
         {cached && <div className="notice"><WifiOff size={18}/>Показана сохранённая копия материалов. Редактирование временно недоступно.<button className="text-button" onClick={() => void load()}>Обновить</button></div>}
         {needRefresh && <div className="notice">Доступна новая версия сайта.<button className="text-button" onClick={() => void updateServiceWorker(true)}>Обновить приложение</button></div>}
         {error && !modal && <div className="error-box" role="alert">{error}<button className="text-button" onClick={() => void load()}>Повторить</button></div>}
         {page !== 'home' && <div className="page-heading"><div><div className="eyebrow">{page === 'subject' ? `ПРЕДМЕТ · ${subject?.semester || 1} СЕМЕСТР` : 'УЧЕБНОЕ ПРОСТРАНСТВО'}</div><h1>{page === 'subject' ? subject?.name || 'Предмет не найден' : page === 'recent' ? 'Последние публикации' : 'Наши предметы'}</h1><p>{page === 'subject' ? subject?.teacher || 'Выберите предмет в меню' : page === 'recent' ? 'Объявления и материалы по всем предметам — от новых к старым.' : 'Лекции, задания и полезные материалы — у каждого предмета своё место.'}</p></div>{editable && <div className="page-actions">{page==='subject' && subject && <button className="button outline" onClick={()=>openModal({kind:'subject',subject})}><Pencil size={16}/>Редактировать предмет</button>}<button className="button primary" onClick={() => openModal(page === 'subjects' ? {kind:'subject'} : {kind:'material'})}><Plus size={18}/>{page === 'subjects' ? 'Добавить предмет' : 'Добавить блок'}</button></div>}</div>}
-        {loading ? <div className="loading"><LoaderCircle className="spin" size={24}/>Загружаем пространство…</div> : <>
+        {loading ? <ContentLoading subjects={page === 'subjects'}/> : <>
 
         {page === 'subjects' ? <>
           <div className="content-toolbar"><label className="search-input"><Search size={17}/><input aria-label="Поиск предметов" placeholder="Найти предмет…" value={query} onChange={e=>setQuery(e.target.value)}/></label><select aria-label="Семестр" value={semester} onChange={e=>setSemester(e.target.value)}><option value="all">Все семестры</option>{[...new Set(data.subjects.map(s=>s.semester))].sort((a,b)=>a-b).map(s=><option key={s} value={s}>{s} семестр</option>)}</select>{editable && data.subjects.length>1 && <button className={`button ${reordering?'subtle':'outline'}`} onClick={()=>setReordering(!reordering)} aria-pressed={reordering}><ArrowUpDown size={16}/>{reordering?'Готово':'Порядок'}</button>}</div>
@@ -248,10 +254,11 @@ export default function App() {
     {toast && <div className="toast" role="status"><Check size={17}/>{toast}</div>}
     {modal && <Dialog title={modal.kind==='material' ? modal.material ? 'Редактировать блок' : 'Новый блок' : modal.kind==='subject' ? modal.subject ? 'Редактировать предмет' : 'Новый предмет' : modal.kind==='section' ? modal.section ? 'Название раздела' : 'Новый раздел' : 'Удалить блок?'} close={closeModal}>
       {error && <div className="error-box" role="alert">{error}</div>}
-      {modal.kind==='material' && <MaterialForm initial={modal.material} data={data} subjectId={page==='subject'?subjectId:null} sectionId={sectionId} busy={busy} cancel={closeModal} submit={(material, files)=>void run(async()=>{
+      {modal.kind==='material' && <MaterialForm initial={modal.material} data={data} subjectId={page==='subject'?subjectId:null} sectionId={sectionId} busy={busy} busyLabel={busyLabel} cancel={closeModal} submit={(material, files)=>void run(async()=>{
         const uploaded: Attachment[] = []
         try {
-          for(const file of files) uploaded.push(await uploadFile(file))
+          for(const [index, file] of files.entries()) { setBusyLabel(`Загружаем файл ${index + 1} из ${files.length}…`); uploaded.push(await uploadFile(file)) }
+          setBusyLabel('Публикуем блок…')
           const complete = {...material, attachments:[...material.attachments,...uploaded]}
           await saveMaterial(complete)
           markRead([complete.id])
@@ -280,7 +287,7 @@ export default function App() {
   </div>
 }
 
-function FormActions({busy,cancel,label='Сохранить'}:{busy:boolean;cancel:()=>void;label?:string}) { return <div className="form-actions"><button type="button" className="button outline" disabled={busy} onClick={cancel}>Отмена</button><button className="button primary" disabled={busy}>{busy?<LoaderCircle className="spin" size={17}/>:<Check size={17}/>}{busy?'Сохраняем…':label}</button></div> }
+function FormActions({busy,cancel,label='Сохранить',busyLabel='Сохраняем…'}:{busy:boolean;cancel:()=>void;label?:string;busyLabel?:string}) { return <div className="form-actions"><button type="button" className="button outline" disabled={busy} onClick={cancel}>Отмена</button><button className="button primary" disabled={busy} aria-busy={busy}>{busy?<LoadingDots small/>:<Check size={17}/>}{busy?busyLabel:label}</button></div> }
 
 function OrderControls({subject,disabled,first,last,move}:{subject:Subject;disabled:boolean;first:boolean;last:boolean;move:(direction:-1|1)=>void}) {
   return <div className="order-controls"><button className="icon-button" disabled={disabled||first} aria-label={`Выше: ${subject.name}`} onClick={()=>move(-1)}><ArrowUp size={15}/></button><button className="icon-button" disabled={disabled||last} aria-label={`Ниже: ${subject.name}`} onClick={()=>move(1)}><ArrowDown size={15}/></button></div>
@@ -294,7 +301,7 @@ function SubjectForm({initial,nextPosition,busy,cancel,submit}:{initial?:Subject
   </form>
 }
 
-function MaterialForm({initial,data,subjectId,sectionId,busy,cancel,submit}:{initial?:Material;data:HubData;subjectId:string|null;sectionId:string;busy:boolean;cancel:()=>void;submit:(m:Material,files:File[])=>void}) {
+function MaterialForm({initial,data,subjectId,sectionId,busy,busyLabel,cancel,submit}:{initial?:Material;data:HubData;subjectId:string|null;sectionId:string;busy:boolean;busyLabel:string;cancel:()=>void;submit:(m:Material,files:File[])=>void}) {
   const [selectedSubject,setSelectedSubject]=useState(initial?.subject_id || subjectId || '')
   const [selectedSection,setSelectedSection]=useState(initial?.section_id || (sectionId==='all'?'':sectionId))
   const [attachments,setAttachments]=useState<Attachment[]>(initial?.attachments || [])
@@ -314,6 +321,6 @@ function MaterialForm({initial,data,subjectId,sectionId,busy,cancel,submit}:{ini
     <label className="upload-zone"><Upload size={20}/><span>Выбрать файлы и картинки</span><input type="file" multiple accept=".pdf,.doc,.docx,.ppt,.pptx,.xls,.xlsx,.txt,.zip,.png,.jpg,.jpeg,.webp,.gif,.avif" onChange={e=>{const picked=Array.from(e.target.files||[]);setFiles([...files,...picked]);setValidation('');e.target.value=''}} disabled={busy}/></label>
     {files.map((f,i)=><div className="attachment-row" key={`${f.name}-${i}`}><File size={16}/><span>{f.name}<small>{formatSize(f.size)}</small></span><button type="button" className="icon-button" aria-label={`Убрать файл ${f.name}`} onClick={()=>setFiles(files.filter((_,n)=>n!==i))}><X size={16}/></button></div>)}
     {attachments.map(a=><div className="attachment-row" key={a.id}><LinkIcon size={16}/><span>{a.name}</span><button type="button" className="icon-button" aria-label={`Убрать вложение ${a.name}`} onClick={()=>setAttachments(attachments.filter(x=>x.id!==a.id))}><X size={16}/></button></div>)}
-    <div className="link-fields"><label className="field">Название ссылки<input value={linkName} onChange={e=>setLinkName(e.target.value)} placeholder="Например, шаблон отчёта" maxLength={180}/></label><label className="field">Ссылка<input value={linkUrl} onChange={e=>setLinkUrl(e.target.value)} placeholder="https://…"/></label><button className="button outline" type="button" onClick={addLink} disabled={busy}><LinkIcon size={16}/>Добавить ссылку</button></div><FormActions busy={busy} cancel={cancel} label={initial?'Сохранить изменения':'Опубликовать блок'}/>
+    <div className="link-fields"><label className="field">Название ссылки<input value={linkName} onChange={e=>setLinkName(e.target.value)} placeholder="Например, шаблон отчёта" maxLength={180}/></label><label className="field">Ссылка<input value={linkUrl} onChange={e=>setLinkUrl(e.target.value)} placeholder="https://…"/></label><button className="button outline" type="button" onClick={addLink} disabled={busy}><LinkIcon size={16}/>Добавить ссылку</button></div><FormActions busy={busy} busyLabel={busyLabel} cancel={cancel} label={initial?'Сохранить изменения':'Опубликовать блок'}/>
   </form>
 }

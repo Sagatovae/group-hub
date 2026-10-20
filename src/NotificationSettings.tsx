@@ -3,6 +3,7 @@ import { ArrowUpRight, Bell, CheckCheck, FileText, X } from 'lucide-react'
 import type { HubData, Material } from './lib/types'
 import { formatDate } from './lib/utils'
 import { deviceKey, isAppWindow } from './lib/reading'
+import { LoadingDots } from './Loading'
 
 const endpoint = import.meta.env.VITE_SUPABASE_URL ? `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/push-notifications` : ''
 const supported = () => 'Notification' in window && 'serviceWorker' in navigator && 'PushManager' in window
@@ -21,12 +22,13 @@ function needsIntroduction() {
 }
 function rememberIntroduction() { try { localStorage.setItem(promptKey, 'seen') } catch { /* Usable without browser storage. */ } }
 
-export function NotificationSettings({ data, read, onRead, onOpenMaterial, onOpenChange }: {
-  data: HubData; read: Set<string>; onRead: (ids: string[]) => void; onOpenMaterial: (material: Material) => void; onOpenChange: (open: boolean) => void
+export function NotificationSettings({ ready, data, read, onRead, onOpenMaterial, onOpenChange }: {
+  ready: boolean; data: HubData; read: Set<string>; onRead: (ids: string[]) => void; onOpenMaterial: (material: Material) => void; onOpenChange: (open: boolean) => void
 }) {
   const dialog = useRef<HTMLDialogElement>(null)
   const [mode, setMode] = useState<'intro' | 'inbox' | null>(null)
   const [subscribed, setSubscribed] = useState(false)
+  const [subscriptionChecked, setSubscriptionChecked] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [permission, setPermission] = useState<NotificationPermission | null>(() => supported() ? Notification.permission : null)
@@ -34,8 +36,8 @@ export function NotificationSettings({ data, read, onRead, onOpenMaterial, onOpe
   const standalone = isAppWindow()
   const canSubscribe = supported() && !!endpoint && (!ios || standalone)
   useEffect(() => {
-    if (needsIntroduction() && Notification.permission === 'default') setMode('intro')
-  }, [])
+    if (ready && needsIntroduction() && (Notification.permission === 'default' || subscriptionChecked && !subscribed)) setMode('intro')
+  }, [ready, subscriptionChecked, subscribed])
   useEffect(() => {
     onOpenChange(mode !== null)
     if (mode && !dialog.current?.open) dialog.current?.showModal()
@@ -47,7 +49,8 @@ export function NotificationSettings({ data, read, onRead, onOpenMaterial, onOpe
     navigator.serviceWorker.ready.then(registration => registration.pushManager.getSubscription()).then(subscription => {
       if (active) {
         setSubscribed(!!subscription)
-        if (!subscription && Notification.permission === 'granted' && needsIntroduction()) setMode('intro')
+        if (subscription) rememberIntroduction()
+        setSubscriptionChecked(true)
       }
     }).catch(() => {})
     return () => { active = false }
@@ -117,7 +120,7 @@ export function NotificationSettings({ data, read, onRead, onOpenMaterial, onOpe
         {error && <p className="error-box" role="alert">{error}</p>}
         <div className="notification-dialog-actions">
           {mode === 'intro' && <button className="button outline" disabled={busy} onClick={close}>Позже</button>}
-          {(canSubscribe || subscribed) && <button className="button primary" disabled={busy || permission === 'denied' && !subscribed} onClick={() => void (subscribed ? disable() : enable())}>{busy ? 'Сохраняем…' : subscribed ? 'Отключить уведомления' : 'Включить уведомления'}</button>}
+          {(canSubscribe || subscribed) && <button className="button primary" aria-busy={busy} disabled={busy || permission === 'denied' && !subscribed} onClick={() => void (subscribed ? disable() : enable())}>{busy && <LoadingDots small/>}{busy ? 'Сохраняем…' : subscribed ? 'Отключить уведомления' : 'Включить уведомления'}</button>}
         </div>
       </div>
     </dialog>

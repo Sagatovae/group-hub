@@ -128,3 +128,25 @@
 @media(max-width:1180px){.page-background{left:220px}}
 @media(max-width:760px){.page-background{left:0}.ambient-symbol{opacity:.75}.symbol-0{width:78px;height:78px;right:-12px}.symbol-1{left:-18px}.symbol-3{width:42px;height:42px}.ambient-orbit{right:-290px}.notifications-dialog{padding:20px 16px;max-height:calc(100dvh - 28px - env(safe-area-inset-top,0px) - env(safe-area-inset-bottom,0px))}.notification-list{max-height:42dvh}.notification-item{padding:12px 8px;gap:8px}.notification-item-end{flex-direction:column}.new-count{font-size:9px}.section-tabs button{flex-wrap:wrap}.subject-nav-row .new-count{font-size:10px}.material-card{scroll-margin-top:18px}}
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+
+/* Shared loading language: a launch scene, shimmer placeholders and activity dots. */
+.loading-indicator{display:inline-flex;align-items:center;justify-content:center;gap:11px;color:#7b8455;font-size:12px;line-height:1.5}
+.loading-indicator.small{color:inherit;flex-shrink:0}
+.loading-dots{display:inline-flex;align-items:center;gap:4px;min-height:18px;padding:3px 0}
+.loading-dots i{display:block;width:6px;height:6px;background:currentColor;border-radius:50%;animation:activity-dot 1.2s ease-in-out infinite}
+.loading-dots i:nth-child(2){animation-delay:.15s}.loading-dots i:nth-child(3){animation-delay:.3s}.loading-indicator.small .loading-dots i{width:4px;height:4px}.loading-indicator.small .loading-dots{gap:3px}
+@keyframes activity-dot{0%,70%,100%{opacity:.35;transform:translateY(0)}35%{opacity:1;transform:translateY(-4px)}}
+.content-loading{padding:12px 0 10px}.content-loading>.loading-indicator{margin-bottom:22px}
+.loading-placeholders{display:grid;gap:17px}.loading-placeholder{position:relative;overflow:hidden;min-height:185px;border:1px solid #e3e8dc;border-radius:12px;background:#ffffffc9;padding:22px;display:flex;flex-direction:column;align-items:flex-start;gap:13px}
+.placeholder-line,.placeholder-file{display:block;background:#e9ede2;border-radius:6px;width:93%;height:10px}.placeholder-line.short{width:24%;height:9px}.placeholder-line.title{width:60%;height:18px;margin:5px 0}.placeholder-line.medium{width:73%}.placeholder-file{width:145px;max-width:70%;height:35px;margin-top:7px;border-radius:8px}
+.loading-placeholder::after,.image-preview:not(.is-loaded)::before{content:"";position:absolute;inset:0;transform:translateX(-100%);background:linear-gradient(100deg,transparent 15%,#ffffffb5 45%,transparent 75%);animation:loading-shimmer 1.7s ease-in-out infinite;pointer-events:none}
+.loading-placeholder:nth-child(2)::after{animation-delay:.15s}.loading-placeholder:nth-child(3)::after{animation-delay:.3s}.loading-placeholders.subject-grid{grid-template-columns:repeat(3,minmax(0,1fr))}.subject-placeholder{padding-top:135px;min-height:285px}.subject-placeholder::before{content:"";position:absolute;top:0;left:0;right:0;height:110px;background:#e7eddf}
+@keyframes loading-shimmer{to{transform:translateX(100%)}}
+.loading-topline{position:absolute;top:82px;left:0;right:0;height:2px;overflow:hidden;background:#e9eddf;z-index:2}.loading-topline::after{content:"";position:absolute;inset:0;width:35%;border-radius:3px;background:#7b8455;animation:loading-travel 1.4s ease-in-out infinite}
+@keyframes loading-travel{from{transform:translateX(-110%)}to{transform:translateX(300%)}}
+.image-preview{display:block;position:relative;aspect-ratio:16/10;max-height:360px;overflow:hidden;background:#edf1e6}
+.image-attachment .image-preview img{width:100%;height:100%;max-height:360px;object-fit:contain;border-bottom:0;opacity:0;transition:opacity .3s ease}.image-attachment .image-preview.is-loaded img{opacity:1}
+.button[aria-busy=true]{cursor:wait}.form-actions .button[aria-busy=true]{white-space:normal;line-height:1.5}
+@media(max-width:1180px){.loading-placeholders.subject-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:760px){.loading-topline{top:calc(65px + env(safe-area-inset-top,0px))}.loading-placeholders.subject-grid{grid-template-columns:1fr}.loading-placeholder{padding:18px;min-height:170px}.subject-placeholder{padding-top:130px;min-height:270px}.content-loading{padding-top:6px}.content-loading>.loading-indicator{margin-bottom:18px}}
+@media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}.loading-placeholder::after,.image-preview::before{display:none}.loading-dots i{opacity:.7}.loading-topline::after{width:100%;opacity:.5}}

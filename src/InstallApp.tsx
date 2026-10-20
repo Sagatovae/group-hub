@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { Download, X } from 'lucide-react'
 import { isAppWindow } from './lib/reading'
+import { LoadingDots } from './Loading'
 
 type InstallPrompt = Event & {
   prompt: () => Promise<void>
@@ -58,7 +59,7 @@ export function InstallApp() {
 
   if (installed) return null
   return <>
-    <button className="button outline install-app" onClick={() => void install()} disabled={busy}><Download size={16}/><span>Установить</span></button>
+    <button className="button outline install-app" onClick={() => void install()} disabled={busy} aria-busy={busy}>{busy ? <LoadingDots small/> : <Download size={16}/>}<span>{busy ? 'Устанавливаем…' : 'Установить'}</span></button>
     <dialog ref={dialog} className="install-dialog" onClick={event => { if (event.target === event.currentTarget) dialog.current?.close() }} aria-labelledby="install-title">
       <div className="dialog-heading"><h2 id="install-title">Приложение ИДБ-26-09</h2><button className="icon-button" onClick={() => dialog.current?.close()} aria-label="Закрыть окно"><X size={20}/></button></div>
       <p>Добавьте приложение на главный экран — оно будет открываться в отдельном окне.</p>
