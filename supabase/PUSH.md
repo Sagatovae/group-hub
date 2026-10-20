@@ -26,3 +26,24 @@ select cron.unschedule('push-notifications');
 ```
 
 Тесты, пробные уведомления и тестовые публикации автоматически не запускаются.
+
+## First launch and notification inbox
+
+Installed app windows offer to enable push on the first launch after this update.
+The system permission request runs only from the Enable button (browser requirement).
+Choosing Later remembers the choice on that device; push can still be enabled from
+its bell. Existing subscriptions do not need to be recreated.
+
+The bell lists the latest 40 published materials and announcements, regardless of
+whether this device has push enabled. An item opens and highlights its material.
+Unread badges count all unread materials per subject and section. A block becomes
+read after it is visible in the active window for 1.2 seconds. Opening the bell or
+a subject does not mark offscreen blocks as read. The inbox also has Mark all read.
+Own publications are marked read immediately. Reading state is saved in this
+browser's localStorage, scoped to the database URL, and shared between tabs on the
+same origin. It does not sync between devices and resets if browser data is cleared.
+
+While visible, the app reloads data every minute, on returning to the window, and
+when its service worker receives a push. Background reloads skip active edits and
+do not replace in-progress changes. These frontend additions do not change the
+server push subscription or dispatch schema.

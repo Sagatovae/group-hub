@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import { Download, X } from 'lucide-react'
+import { isAppWindow } from './lib/reading'
 
 type InstallPrompt = Event & {
   prompt: () => Promise<void>
@@ -7,11 +8,6 @@ type InstallPrompt = Event & {
 }
 
 const appDisplayModes = ['standalone', 'fullscreen', 'minimal-ui', 'window-controls-overlay']
-function isAppWindow() {
-  return appDisplayModes.some(mode => window.matchMedia(`(display-mode: ${mode})`).matches)
-    || !!(navigator as Navigator & { standalone?: boolean }).standalone
-    || document.referrer.startsWith('android-app://')
-}
 
 export function InstallApp() {
   const [prompt, setPrompt] = useState<InstallPrompt | null>(null)

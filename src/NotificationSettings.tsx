@@ -1,5 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { Bell, X } from 'lucide-react'
+import { ArrowUpRight, Bell, CheckCheck, FileText, X } from 'lucide-react'
+import type { HubData, Material } from './lib/types'
+import { formatDate } from './lib/utils'
+import { deviceKey, isAppWindow } from './lib/reading'
 
 const endpoint = import.meta.env.VITE_SUPABASE_URL ? `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/push-notifications` : ''
 const supported = () => 'Notification' in window && 'serviceWorker' in navigator && 'PushManager' in window
@@ -11,25 +14,46 @@ async function save(action: 'subscribe' | 'unsubscribe', subscription: PushSubsc
   const response = await fetch(endpoint, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ action, subscription: subscription.toJSON() }) })
   if (!response.ok) throw new Error('Не удалось сохранить подписку. Проверьте интернет и повторите.')
 }
-export function NotificationSettings() {
+const promptKey = `${deviceKey}notification-intro-v1`
+function needsIntroduction() {
+  if (!isAppWindow() || !supported() || !endpoint || Notification.permission === 'denied') return false
+  try { return !localStorage.getItem(promptKey) } catch { return true }
+}
+function rememberIntroduction() { try { localStorage.setItem(promptKey, 'seen') } catch { /* Usable without browser storage. */ } }
+
+export function NotificationSettings({ data, read, onRead, onOpenMaterial, onOpenChange }: {
+  data: HubData; read: Set<string>; onRead: (ids: string[]) => void; onOpenMaterial: (material: Material) => void; onOpenChange: (open: boolean) => void
+}) {
   const dialog = useRef<HTMLDialogElement>(null)
+  const [mode, setMode] = useState<'intro' | 'inbox' | null>(null)
   const [subscribed, setSubscribed] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [permission, setPermission] = useState<NotificationPermission | null>(() => supported() ? Notification.permission : null)
   const ios = /iPad|iPhone|iPod/.test(navigator.userAgent) || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1)
-  const standalone = window.matchMedia('(display-mode: standalone)').matches || !!(navigator as Navigator & { standalone?: boolean }).standalone
+  const standalone = isAppWindow()
   const canSubscribe = supported() && !!endpoint && (!ios || standalone)
+  useEffect(() => {
+    if (needsIntroduction() && Notification.permission === 'default') setMode('intro')
+  }, [])
+  useEffect(() => {
+    onOpenChange(mode !== null)
+    if (mode && !dialog.current?.open) dialog.current?.showModal()
+    if (!mode) dialog.current?.close()
+  }, [mode, onOpenChange])
   useEffect(() => {
     if (!supported()) return
     let active = true
     navigator.serviceWorker.ready.then(registration => registration.pushManager.getSubscription()).then(subscription => {
-      if (active) setSubscribed(!!subscription)
+      if (active) {
+        setSubscribed(!!subscription)
+        if (!subscription && Notification.permission === 'granted' && needsIntroduction()) setMode('intro')
+      }
     }).catch(() => {})
     return () => { active = false }
   }, [])
   const enable = async () => {
-    setError(''); setBusy(true)
+    setError(''); setBusy(true); rememberIntroduction()
     try {
       // Ask directly from the user's click, before network requests (required on iOS).
       const allowed = await Notification.requestPermission()
@@ -45,6 +69,7 @@ export function NotificationSettings() {
       try { await save('subscribe', subscription) }
       catch (failure) { if (created) await subscription.unsubscribe().catch(() => {}); throw failure }
       setSubscribed(true)
+      if (mode === 'intro') setMode(null)
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'Не удалось включить уведомления.') }
     finally { setBusy(false) }
   }
@@ -58,14 +83,43 @@ export function NotificationSettings() {
     } catch (failure) { setError(failure instanceof Error ? failure.message : 'Не удалось отключить уведомления.') }
     finally { setBusy(false) }
   }
+  const latest = [...data.materials].sort((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at) || b.id.localeCompare(a.id)).slice(0, 40)
+  const unread = data.materials.filter(material => !read.has(material.id)).length
+  const close = () => {
+    if (busy) return
+    if (mode === 'intro') rememberIntroduction()
+    setMode(null); setError('')
+  }
   return <>
-    <button className={`icon-button notification-settings ${subscribed ? 'selected' : ''}`} aria-label="Настроить уведомления" title="Уведомления" onClick={() => { setError(''); dialog.current?.showModal() }}><Bell size={19}/>{subscribed && <span className="notification-enabled"/>}</button>
-    <dialog ref={dialog} className="install-dialog" aria-labelledby="notifications-title" onCancel={event => { if (busy) event.preventDefault() }}>
-      <div className="dialog-heading"><h2 id="notifications-title">Уведомления</h2><button className="icon-button" disabled={busy} onClick={() => dialog.current?.close()} aria-label="Закрыть окно"><X size={20}/></button></div>
-      <p>Получайте уведомления о новых объявлениях и материалах по всем предметам, даже когда приложение закрыто.</p>
-      {ios && !standalone ? <p className="install-note">На iPhone сначала добавьте сайт на экран «Домой» через меню «Поделиться» в Safari. Затем откройте приложение с главного экрана и включите уведомления. Нужна iOS 16.4 или новее.</p> : !supported() ? <p className="install-note">Этот браузер не поддерживает push-уведомления. Попробуйте актуальную версию браузера.</p> : !endpoint ? <p className="install-note">Уведомления доступны в опубликованном приложении с подключённой базой.</p> : <p className="install-note" role="status">{subscribed ? 'Уведомления на этом устройстве включены.' : permission === 'denied' ? 'Уведомления заблокированы. Разрешите их в настройках браузера или приложения.' : 'Подписка действует только для этого устройства. Её можно отключить в любой момент.'}</p>}
-      {error && <p className="error-box" role="alert">{error}</p>}
-      {(canSubscribe || subscribed) && <button className="button primary" disabled={busy} onClick={() => void (subscribed ? disable() : enable())}>{busy ? 'Сохраняем…' : subscribed ? 'Отключить уведомления' : 'Включить уведомления'}</button>}
+    <button className={`icon-button notification-settings ${subscribed ? 'selected' : ''}`} aria-label={`Уведомления${unread ? `, непрочитанных: ${unread}` : ''}`} title="Уведомления" onClick={() => { setError(''); setMode('inbox') }}><Bell size={19}/>{unread ? <span className="notification-count">{unread > 99 ? '99+' : unread}</span> : subscribed && <span className="notification-enabled"/>}</button>
+    <dialog ref={dialog} className={`install-dialog notifications-dialog ${mode === 'intro' ? 'notification-intro' : ''}`} aria-labelledby="notifications-title" onClose={() => { setMode(null); setError('') }} onCancel={event => { event.preventDefault(); close() }} onClick={event => { if (event.target === event.currentTarget) close() }}>
+      <div className="dialog-heading"><h2 id="notifications-title">{mode === 'intro' ? 'Будьте в курсе' : 'Уведомления'}</h2><button className="icon-button" disabled={busy} onClick={close} aria-label="Закрыть окно"><X size={20}/></button></div>
+      {mode === 'intro' ? <><div className="notification-intro-icon"><Bell size={34}/><span/></div><p>Разрешите уведомления, чтобы сразу узнавать о новых объявлениях, лекциях и заданиях.</p><p className="install-note">После нажатия «Включить» подтвердите разрешение в системном окне. Настройку можно изменить в любой момент.</p></> : <>
+        <div className="notification-list-heading"><span>Последние публикации</span>{unread > 0 && <button className="text-button" onClick={() => onRead(data.materials.map(material => material.id))}><CheckCheck size={15}/>Прочитать все</button>}</div>
+        <div className="notification-list">
+          {latest.map(material => {
+            const subject = data.subjects.find(item => item.id === material.subject_id)
+            const section = data.sections.find(item => item.id === material.section_id)
+            const isUnread = !read.has(material.id)
+            return <button key={material.id} className={`notification-item ${isUnread ? 'is-unread' : ''}`} onClick={() => { close(); onOpenMaterial(material) }}>
+              <span className="notification-item-icon">{subject ? <FileText size={18}/> : <Bell size={18}/>}</span>
+              <span className="notification-item-copy"><small>{subject?.name || 'Объявления'}{section ? ` · ${section.name}` : ''}</small><strong>{material.title}</strong>{material.body && <span>{material.body}</span>}<small>{formatDate(material.created_at)}{material.attachments.length > 0 ? ` · Файлов: ${material.attachments.length}` : ''}</small></span>
+              <span className="notification-item-end">{isUnread && <span className="unread-dot"/>}<ArrowUpRight size={15}/></span>
+            </button>
+          })}
+          {!latest.length && <div className="notification-empty"><Bell size={28}/><p>Здесь появятся новые объявления и материалы.</p></div>}
+        </div>
+        <p className="install-note reading-note">Прочтение сохраняется на этом устройстве. Материал отмечается прочитанным при просмотре.</p>
+      </>}
+      <div className="push-preferences">
+        {mode !== 'intro' && <h3>Push-уведомления</h3>}
+        {ios && !standalone ? <p className="install-note">На iPhone сначала добавьте сайт на экран «Домой» через меню «Поделиться» в Safari. Затем откройте приложение с главного экрана и включите уведомления. Нужна iOS 16.4 или новее.</p> : !supported() ? <p className="install-note">Этот браузер не поддерживает push-уведомления.</p> : !endpoint ? <p className="install-note">Push-уведомления доступны при подключённой базе.</p> : <p className="install-note" role="status">{subscribed ? 'Уведомления на этом устройстве включены.' : permission === 'denied' ? 'Уведомления заблокированы. Разрешите их в настройках браузера или приложения.' : 'Новые публикации будут приходить, даже когда приложение закрыто.'}</p>}
+        {error && <p className="error-box" role="alert">{error}</p>}
+        <div className="notification-dialog-actions">
+          {mode === 'intro' && <button className="button outline" disabled={busy} onClick={close}>Позже</button>}
+          {(canSubscribe || subscribed) && <button className="button primary" disabled={busy || permission === 'denied' && !subscribed} onClick={() => void (subscribed ? disable() : enable())}>{busy ? 'Сохраняем…' : subscribed ? 'Отключить уведомления' : 'Включить уведомления'}</button>}
+        </div>
+      </div>
     </dialog>
   </>
 }
