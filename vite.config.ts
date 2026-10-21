@@ -13,7 +13,7 @@ export default defineConfig(({ mode }) => {
       manifest: {
         name: 'ИДБ-26-09 — учебное пространство', short_name: 'ИДБ-26-09', lang: 'ru',
         description: 'Объявления, предметы и учебные материалы вашей группы',
-        theme_color: '#41644a', background_color: '#f7f8f5', display: 'standalone',
+        theme_color: '#626e45', background_color: '#f7f8f5', display: 'standalone',
         id: base, start_url: base, scope: base,
         shortcuts: [
           { name: 'Объявления', url: `${base}#home` },
