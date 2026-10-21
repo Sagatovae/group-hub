@@ -1,4 +1,4 @@
-import { Bell, BookOpen, Clock3, FileText, FolderOpen, Paperclip, Pencil, Sparkles } from 'lucide-react'
+import { Bell, BookOpen, CalendarDays, Clock3, FileText, FolderOpen, Paperclip, Pencil, Sparkles } from 'lucide-react'
 import type { Page } from './lib/types'
 
 const scenes = {
@@ -6,6 +6,7 @@ const scenes = {
   subjects: [BookOpen, Pencil, FolderOpen, Sparkles],
   subject: [FileText, Paperclip, Pencil, BookOpen],
   recent: [Clock3, Sparkles, FileText, FolderOpen],
+  deadlines: [CalendarDays, Clock3, Pencil, Sparkles],
 }
 export function PageBackground({ page, subjectId, color }: { page: Page; subjectId: string | null; color?: string }) {
   const offset = [...(subjectId || '')].reduce((sum, char) => sum + char.charCodeAt(0), 0) % 4

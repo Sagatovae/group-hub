@@ -18,6 +18,7 @@ export default defineConfig(({ mode }) => {
         shortcuts: [
           { name: 'Объявления', url: `${base}#home` },
           { name: 'Предметы', url: `${base}#subjects` },
+          { name: 'Дедлайны', url: `${base}#deadlines` },
         ],
         icons: [
           { src: 'icon-shapes-192.png', sizes: '192x192', type: 'image/png', purpose: 'any' },
