@@ -25,6 +25,7 @@ create table public.materials (
   title text not null default '' constraint materials_title_length_check check (length(btrim(title)) <= 180),
   body text not null default '' check (length(body) <= 20000),
   deadline date,
+  delete_after_deadline boolean not null default false check (not delete_after_deadline or deadline is not null),
   author text constraint materials_author_check check (author in ('Староста','Групп.орг','Проф.орг')),
   pinned boolean not null default false,
   created_at timestamptz not null default now(),

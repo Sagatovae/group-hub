@@ -5,7 +5,7 @@ export const AUTHORS = ['Староста', 'Групп.орг', 'Проф.ор�
 export type Author = typeof AUTHORS[number]
 export interface Material {
   id: string; subject_id: string | null; section_id: string | null; title: string;
-  body: string; deadline: string | null; pinned: boolean; author: Author | null; created_at: string; attachments: Attachment[]
+  body: string; deadline: string | null; delete_after_deadline?: boolean; pinned: boolean; author: Author | null; created_at: string; attachments: Attachment[]
 }
 export interface HubData { subjects: Subject[]; sections: Section[]; materials: Material[] }
 export type Page = 'home' | 'subjects' | 'subject' | 'recent' | 'deadlines'

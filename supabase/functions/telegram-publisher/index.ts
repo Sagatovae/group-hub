@@ -1,6 +1,6 @@
 import { createClient } from 'npm:@supabase/supabase-js@2'
 
-type Attachment = { name: string; url: string; size?: number; mime_type?: string }
+type Attachment = { name: string; url: string; size?: number; mime_type?: string; storage_path?: string }
 type Material = { title: string; body: string; author: string | null; attachments: Attachment[]; subject_name?: string | null; section_name?: string | null }
 type Part = { key: string; kind: 'text' | 'photo' | 'document'; text?: string; caption?: string; file?: Attachment }
 type Receipt = { type: string; size?: number; name?: string; caption?: string }
@@ -79,6 +79,9 @@ Deno.serve(async request => {
           if (method === 'deleteMessage') return existingId
           throw new DeliveryError('message_missing', 3)
         }
+        if (method === 'deleteMessage' && description.includes("message can't be deleted")) {
+          throw new DeliveryError('message_too_old')
+        }
       }
       throw new DeliveryError(`telegram_${value?.error_code || response.status}`, Math.max(60, value?.parameters?.retry_after || 0))
     }
@@ -95,9 +98,43 @@ Deno.serve(async request => {
     if (result.error) throw new DeliveryError('queue_checkpoint_failed', 180)
   }
   try {
-    const wanted = parts(job.payload, url)
     const legacy = job.delivered_parts == null ? parts(job.legacy_payload || job.payload, url, true) : []
     let delivered: Delivered[] = job.delivered_parts ?? legacy.slice(0, job.message_ids.length).map((part, i) => ({ ...part, messageId: job.message_ids[i] }))
+    if (job.payload.expired) {
+      // Never send a replacement for an expired or already removed message.
+      const sent = delivered[0]
+      if (sent) {
+        try {
+          await api('deleteMessage', { chat_id: channel, message_id: sent.messageId }, sent.messageId)
+        } catch (error) {
+          if (!(error instanceof DeliveryError) || error.code !== 'message_too_old') throw error
+          const notice = '⌛ Срок истёк. Материал удалён с сайта.'
+          try {
+            if (sent.kind === 'text') {
+              await api('editMessageText', { chat_id: channel, message_id: sent.messageId,
+                text: `${notice}\n\n${sent.text || ''}`.slice(0, 4096), link_preview_options: { is_disabled: true } }, sent.messageId)
+            } else {
+              await api('editMessageCaption', { chat_id: channel, message_id: sent.messageId,
+                caption: `${notice}\n\n${sent.caption || ''}`.slice(0, 1024) }, sent.messageId)
+            }
+          } catch (editError) {
+            if (!(editError instanceof DeliveryError) || editError.code !== 'message_missing') throw editError
+          }
+        }
+        // Persist progress before any storage cleanup; retries don't repeat notices.
+        await checkpoint(delivered.slice(1), false)
+      } else {
+        const paths = [...new Set((job.payload.attachments as Attachment[] || [])
+          .map(file => file.storage_path).filter((path): path is string => !!path))]
+        if (paths.length) {
+          const removed = await db.storage.from('materials').remove(paths)
+          if (removed.error) throw new DeliveryError('expired_files_cleanup_failed', 180)
+        }
+        await checkpoint([], true)
+      }
+      return new Response('Expired material processed')
+    }
+    const wanted = parts(job.payload, url)
     // One Telegram mutation per invocation; keep confirmed state for unchanged parts.
     const target = wanted.find(part => !delivered.some(sent => sent.key === part.key && same(sent, part)))
     const existing = target ? delivered.find(sent => sent.key === target.key) : delivered.find(sent => !wanted.some(part => part.key === sent.key))
