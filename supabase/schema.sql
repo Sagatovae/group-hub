@@ -22,13 +22,18 @@ create table public.materials (
   id uuid primary key default gen_random_uuid(),
   subject_id uuid references public.subjects(id) on delete cascade,
   section_id uuid,
-  title text not null check (length(trim(title)) between 1 and 180),
+  title text not null default '' constraint materials_title_length_check check (length(btrim(title)) <= 180),
   body text not null default '' check (length(body) <= 20000),
   deadline date,
   author text constraint materials_author_check check (author in ('Староста','Групп.орг','Проф.орг')),
   pinned boolean not null default false,
   created_at timestamptz not null default now(),
   attachments jsonb not null default '[]'::jsonb check (jsonb_typeof(attachments) = 'array'),
+  constraint materials_content_check check (
+    length(btrim(title)) > 0 or length(btrim(body)) > 0
+    or jsonb_array_length(attachments) > 0 or deadline is not null
+    or author is not null or pinned
+  ),
   constraint material_location check ((subject_id is null) = (section_id is null)),
   constraint section_belongs_to_subject foreign key (section_id, subject_id)
     references public.sections(id, subject_id) on delete cascade

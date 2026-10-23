@@ -11,7 +11,7 @@ import { ArrowDownToLine, ArrowDown, ArrowUp, ArrowUpDown, ArrowRight, Bell, Boo
 import { useRegisterSW } from 'virtual:pwa-register/react'
 import { addSubject, deleteMaterial, localFileUrl, isLocal, persistLocal, readData, removeFiles, saveMaterial, saveSection, saveSubject, saveSubjectOrder, setMaterialPinned, uploadFile } from './lib/storage'
 import { AUTHORS, type Author, type Attachment, type HubData, type Material, type Page, type Section, type Subject } from './lib/types'
-import { formatDate, formatSize, matchesQuery, safeUrl, sortMaterials, moveSubject, normalizeData, isImageAttachment } from './lib/utils'
+import { formatDate, formatSize, matchesQuery, safeUrl, sortMaterials, moveSubject, normalizeData, isImageAttachment, hasMaterialContent, materialLabel } from './lib/utils'
 
 type Modal = { kind: 'material'; material?: Material } | { kind: 'subject'; subject?: Subject } | { kind: 'section'; section?: Section } | { kind: 'delete'; material: Material } | null
 const empty: HubData = { subjects: [], sections: [], materials: [] }
@@ -202,11 +202,11 @@ export default function App() {
   }
   const newBadge = (count: number | undefined) => count ? <span className="new-count">Новое: {count}</span> : null
 
-  const materialCard = (m: Material) => <MaterialFrame key={m.id} id={m.id} pinned={m.pinned} unread={!read.has(m.id)} active={appReady && !modal && !menuOpen && !notificationsOpen} onRead={markRead}>
+  const materialCard = (m: Material) => <MaterialFrame key={m.id} id={m.id} label={materialLabel(m)} pinned={m.pinned} unread={!read.has(m.id)} active={appReady && !modal && !menuOpen && !notificationsOpen} onRead={markRead}>
     <div className="card-topline"><span className={`badge ${m.pinned ? 'important' : ''}`}>{m.pinned ? <Pin size={12} /> : <BookOpen size={12} />}{m.pinned ? 'Закреплено' : sectionName(m.section_id)}</span>{!read.has(m.id) && <span className="new-count">Новое</span>}<span className="card-date">{formatDate(m.created_at)}</span></div>
-    <h3>{m.title}</h3><p className="material-body">{m.body}</p>
+    {m.title.trim() && <h3>{m.title}</h3>}{m.body.trim() && <p className="material-body">{m.body}</p>}
     {!!m.attachments.length && <div className="attachments">{m.attachments.map(a => <AttachmentLink attachment={a} key={a.id} />)}</div>}
-    <div className="card-footer"><span className={m.author ? 'author-label' : ''}>{m.author || 'Материал группы'}</span>{(m.subject_id || page === 'recent') && <button className="subject-link" onClick={() => m.subject_id ? navigate('subject', m.subject_id, m.section_id || undefined) : navigate('home')}>{m.subject_id ? `${subjectName(m.subject_id)}${page === 'recent' ? ` · ${sectionName(m.section_id)}` : ''}` : 'Объявления группы'}<ChevronRight size={13}/></button>}{materialDeadline(m,data.sections) && <span className="deadline-badge"><CalendarDays size={13} />До {formatDate(materialDeadline(m,data.sections)!)}</span>}{editable && <div className="card-actions">{m.subject_id === null && <button className={`icon-button ${m.pinned?'selected':''}`} disabled={!!pinningId || orderBusy} onClick={() => void togglePin(m)} aria-pressed={m.pinned} aria-label={`${m.pinned?'Открепить':'Закрепить'}: ${m.title}`}><Pin size={15}/></button>}<button className="icon-button" onClick={() => openModal({ kind: 'material', material: m })} aria-label={`Редактировать: ${m.title}`}><Pencil size={15}/></button><button className="icon-button danger-text" onClick={() => openModal({ kind: 'delete', material: m })} aria-label={`Удалить: ${m.title}`}><Trash2 size={15}/></button></div>}</div>
+    <div className="card-footer"><span className={m.author ? 'author-label' : ''}>{m.author || 'Материал группы'}</span>{(m.subject_id || page === 'recent') && <button className="subject-link" onClick={() => m.subject_id ? navigate('subject', m.subject_id, m.section_id || undefined) : navigate('home')}>{m.subject_id ? `${subjectName(m.subject_id)}${page === 'recent' ? ` · ${sectionName(m.section_id)}` : ''}` : 'Объявления группы'}<ChevronRight size={13}/></button>}{materialDeadline(m,data.sections) && <span className="deadline-badge"><CalendarDays size={13} />До {formatDate(materialDeadline(m,data.sections)!)}</span>}{editable && <div className="card-actions">{m.subject_id === null && <button className={`icon-button ${m.pinned?'selected':''}`} disabled={!!pinningId || orderBusy} onClick={() => void togglePin(m)} aria-pressed={m.pinned} aria-label={`${m.pinned?'Открепить':'Закрепить'}: ${materialLabel(m)}`}><Pin size={15}/></button>}<button className="icon-button" onClick={() => openModal({ kind: 'material', material: m })} aria-label={`Редактировать: ${materialLabel(m)}`}><Pencil size={15}/></button><button className="icon-button danger-text" onClick={() => openModal({ kind: 'delete', material: m })} aria-label={`Удалить: ${materialLabel(m)}`}><Trash2 size={15}/></button></div>}</div>
   </MaterialFrame>
 
   return <div className="app-shell">
@@ -285,7 +285,7 @@ export default function App() {
       })}/>}
       {modal.kind==='section' && <form onSubmit={e=>{e.preventDefault(); const form=new FormData(e.currentTarget); const name=String(form.get('name')).trim(); if(!name) return; void run(async()=>{ if(!subjectId) return; const s: Section={id:modal.section?.id || crypto.randomUUID(),subject_id:subjectId,name,position:modal.section?.position ?? sections.length}; await saveSection(s); await changeData({...data,sections:[...data.sections.filter(x=>x.id!==s.id),s]}); setToast('Раздел сохранён') }) }}><label className="field">Название<input name="name" required maxLength={60} defaultValue={modal.section?.name} placeholder="Например, подготовка к экзамену"/></label><FormActions busy={busy} cancel={closeModal}/></form>}
 
-      {modal.kind==='delete' && <><p className="form-note">Блок «{modal.material.title}» и загруженные в него файлы будут удалены. Внешние файлы по ссылкам останутся в облаке.</p><div className="form-actions"><button className="button outline" disabled={busy} onClick={closeModal}>Отмена</button><button className="button danger" disabled={busy} onClick={()=>void run(async()=>{await deleteMaterial(modal.material.id); await changeData({...data,materials:data.materials.filter(m=>m.id!==modal.material.id)}); try{await removeFiles(modal.material.attachments);setToast('Блок удалён')}catch{setToast('Блок удалён, но файлы нужно убрать из хранилища вручную.')} })}>{busy?<LoaderCircle className="spin" size={17}/>:<Trash2 size={17}/>}Удалить блок</button></div></>}
+      {modal.kind==='delete' && <><p className="form-note">Блок «{materialLabel(modal.material)}» и загруженные в него файлы будут удалены. Внешние файлы по ссылкам останутся в облаке.</p><div className="form-actions"><button className="button outline" disabled={busy} onClick={closeModal}>Отмена</button><button className="button danger" disabled={busy} onClick={()=>void run(async()=>{await deleteMaterial(modal.material.id); await changeData({...data,materials:data.materials.filter(m=>m.id!==modal.material.id)}); try{await removeFiles(modal.material.attachments);setToast('Блок удалён')}catch{setToast('Блок удалён, но файлы нужно убрать из хранилища вручную.')} })}>{busy?<LoaderCircle className="spin" size={17}/>:<Trash2 size={17}/>}Удалить блок</button></div></>}
 
     </Dialog>}
   </div>
@@ -317,11 +317,32 @@ function MaterialForm({initial,data,subjectId,sectionId,busy,busyLabel,cancel,su
   const availableSections=data.sections.filter(s=>s.subject_id===selectedSubject).sort((a,b)=>a.position-b.position)
   const lecture = !!selectedSubject && isLectureSection(availableSections.find(section=>section.id===selectedSection))
   const addLink=()=>{const url=safeUrl(linkUrl);if(!url){setValidation('Введите полную ссылку, которая начинается с https:// или http://.');return}setAttachments([...attachments,{id:crypto.randomUUID(),name:linkName.trim()||new URL(url).hostname,url}]);setLinkName('');setLinkUrl('');setValidation('')}
-  const onSubmit=(e:FormEvent<HTMLFormElement>)=>{e.preventDefault(); const f=new FormData(e.currentTarget);const title=String(f.get('title')).trim(); if(!title)return;if(linkUrl.trim()||linkName.trim()){setValidation('Нажмите «Добавить ссылку» или очистите поля ссылки перед сохранением.');return}if(!lecture && deadline && !parseDay(deadline)){setValidation('Выберите корректную дату дедлайна.');return}submit({id:initial?.id||crypto.randomUUID(),subject_id:selectedSubject||null,section_id:selectedSubject?selectedSection:null,title,body:String(f.get('body')).trim(),deadline:lecture?null:deadline||null,author:(String(f.get('author'))||null) as Author|null,pinned:f.get('pinned')==='on',created_at:initial?.created_at||new Date().toISOString(),attachments},files)}
+  const onSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault()
+    const form = new FormData(event.currentTarget)
+    const readyAttachments = [...attachments]
+    if (linkUrl.trim()) {
+      const url = safeUrl(linkUrl)
+      if (!url) { setValidation('Введите корректный адрес ссылки, начинающийся с https:// или http://.'); return }
+      readyAttachments.push({ id: crypto.randomUUID(), name: linkName.trim() || new URL(url).hostname, url })
+    } else if (linkName.trim()) { setValidation('Укажите адрес ссылки или очистите её название.'); return }
+    if (!lecture && deadline && !parseDay(deadline)) { setValidation('Выберите корректную дату дедлайна.'); return }
+    const material: Material = {
+      id: initial?.id || crypto.randomUUID(), subject_id: selectedSubject || null,
+      section_id: selectedSubject ? selectedSection : null,
+      title: String(form.get('title') || '').trim(), body: String(form.get('body') || '').trim(),
+      deadline: lecture ? null : deadline || null, author: (String(form.get('author') || '') || null) as Author | null,
+      pinned: form.get('pinned') === 'on', created_at: initial?.created_at || new Date().toISOString(), attachments: readyAttachments,
+    }
+    if (!hasMaterialContent(material, files.length)) { setValidation('Заполните хотя бы одно поле, добавьте ссылку или прикрепите файл.'); return }
+    setValidation('')
+    submit(material, files)
+  }
   return <form onSubmit={onSubmit}>
     {validation&&<div className="error-box" role="alert">{validation}</div>}
     <div className="form-row"><label className="field">Где опубликовать<select value={selectedSubject} onChange={e=>{setSelectedSubject(e.target.value);setSelectedSection('')}}><option value="">Объявления группы</option>{data.subjects.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label>{selectedSubject&&<label className="field">Раздел<select value={selectedSection} required onChange={e=>{setSelectedSection(e.target.value);if(isLectureSection(availableSections.find(section=>section.id===e.target.value)))setDeadline('')}}><option value="" disabled>Выберите раздел</option>{availableSections.map(s=><option key={s.id} value={s.id}>{s.name}</option>)}</select></label>}</div>
-    <label className="field">Заголовок<input name="title" required maxLength={180} defaultValue={initial?.title} placeholder="Например, лабораторная № 2"/></label><label className="field">Описание<textarea name="body" rows={5} maxLength={20000} defaultValue={initial?.body} placeholder="Задание, пояснения и всё, что важно знать группе"/></label>
+    <p className="form-note">Заголовок и описание необязательны. Можно опубликовать только файл, картинку, ссылку или текст.</p>
+    <label className="field"><span className="field-label">Заголовок <span className="optional-label">Необязательно</span></span><input name="title" maxLength={180} defaultValue={initial?.title} placeholder="Например, лабораторная № 2"/></label><label className="field"><span className="field-label">Описание <span className="optional-label">Необязательно</span></span><textarea name="body" rows={5} maxLength={20000} defaultValue={initial?.body} placeholder="Задание, пояснения и всё, что важно знать группе"/></label>
     <div className="form-row"><label className="field">Автор<select name="author" defaultValue={initial?.author||''}><option value="">Без подписи</option>{AUTHORS.map(author=><option key={author} value={author}>{author}</option>)}</select></label><label className="checkbox-field"><input name="pinned" type="checkbox" defaultChecked={initial?.pinned}/>Закрепить блок</label></div>
     {lecture ? <p className="lecture-deadline-note"><BookOpen size={15}/>У лекций нет дедлайна.</p> : <div className="deadline-field-row"><label className="field"><span className="field-label">Дедлайн <span className="optional-label">Необязательно</span></span><input type="date" name="deadline" value={deadline} max="9999-12-31" onChange={event=>setDeadline(event.target.value)} disabled={busy}/></label>{deadline && <button className="button outline" type="button" disabled={busy} onClick={()=>setDeadline('')}>Убрать дату</button>}</div>}
     <div className="form-divider"/><h3 className="form-subheading">Файлы и ссылки</h3><p className="form-note">Загружайте файлы и картинки или добавляйте ссылки на облако.</p>

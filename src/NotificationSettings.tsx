@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react'
 import { ArrowUpRight, Bell, CheckCheck, FileText, X } from 'lucide-react'
 import type { HubData, Material } from './lib/types'
-import { formatDate } from './lib/utils'
+import { formatDate, materialLabel } from './lib/utils'
 import { deviceKey, isAppWindow } from './lib/reading'
 import { LoadingDots } from './Loading'
 
@@ -106,7 +106,7 @@ export function NotificationSettings({ ready, data, read, onRead, onOpenMaterial
             const isUnread = !read.has(material.id)
             return <button key={material.id} className={`notification-item ${isUnread ? 'is-unread' : ''}`} onClick={() => { close(); onOpenMaterial(material) }}>
               <span className="notification-item-icon">{subject ? <FileText size={18}/> : <Bell size={18}/>}</span>
-              <span className="notification-item-copy"><small>{subject?.name || 'Объявления'}{section ? ` · ${section.name}` : ''}</small><strong>{material.title}</strong>{material.body && <span>{material.body}</span>}<small>{formatDate(material.created_at)}{material.attachments.length > 0 ? ` · Файлов: ${material.attachments.length}` : ''}</small></span>
+              <span className="notification-item-copy"><small>{subject?.name || 'Объявления'}{section ? ` · ${section.name}` : ''}</small><strong>{materialLabel(material)}</strong>{material.title.trim() && material.body && <span>{material.body}</span>}<small>{formatDate(material.created_at)}{material.attachments.length > 0 ? ` · Файлов: ${material.attachments.length}` : ''}</small></span>
               <span className="notification-item-end">{isUnread && <span className="unread-dot"/>}<ArrowUpRight size={15}/></span>
             </button>
           })}

@@ -18,6 +18,14 @@ export function matchesQuery(material: Material, query: string): boolean {
   const text = [material.title, material.body, material.author || '', ...material.attachments.map(a => a.name)].join(' ').toLocaleLowerCase('ru')
   return text.includes(query.trim().toLocaleLowerCase('ru'))
 }
+export function hasMaterialContent(material: Pick<Material, 'title' | 'body' | 'attachments' | 'deadline' | 'author' | 'pinned'>, pendingFiles = 0): boolean {
+  return !!(material.title.trim() || material.body.trim() || material.attachments.length || pendingFiles || material.deadline || material.author || material.pinned)
+}
+export function materialLabel(material: Material): string {
+  return material.title.trim() || material.body.trim().split('\n')[0].slice(0, 120)
+    || material.attachments[0]?.name || (material.deadline ? 'Событие с дедлайном' : '')
+    || material.author || (material.pinned ? 'Закреплённый блок' : material.subject_id ? 'Материал' : 'Объявление')
+}
 export function normalizeData(data: HubData): HubData {
   return {
     ...data,

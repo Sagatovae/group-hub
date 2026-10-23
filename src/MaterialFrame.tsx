@@ -1,7 +1,7 @@
 import { useEffect, useRef, type ReactNode } from 'react'
 
-export function MaterialFrame({ id, unread, active, pinned, onRead, children }: {
-  id: string; unread: boolean; active: boolean; pinned: boolean; onRead: (ids: string[]) => void; children: ReactNode
+export function MaterialFrame({ id, label, unread, active, pinned, onRead, children }: {
+  id: string; label: string; unread: boolean; active: boolean; pinned: boolean; onRead: (ids: string[]) => void; children: ReactNode
 }) {
   const card = useRef<HTMLElement>(null)
   useEffect(() => {
@@ -21,5 +21,5 @@ export function MaterialFrame({ id, unread, active, pinned, onRead, children }: 
     document.addEventListener('visibilitychange', schedule)
     return () => { clear(); observer.disconnect(); document.removeEventListener('visibilitychange', schedule) }
   }, [id, unread, active, onRead])
-  return <article ref={card} id={`material-${id}`} className={`material-card ${pinned ? 'pinned' : ''} ${unread ? 'unread-material' : ''}`}>{children}</article>
+  return <article ref={card} id={`material-${id}`} aria-label={label} className={`material-card ${pinned ? 'pinned' : ''} ${unread ? 'unread-material' : ''}`}>{children}</article>
 }
