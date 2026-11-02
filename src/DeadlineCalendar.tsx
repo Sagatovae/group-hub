@@ -1,5 +1,6 @@
+import { HoldButton } from './lib/longPress'
 import { useEffect, useRef, useState, type KeyboardEvent, type ReactNode } from 'react'
-import { CalendarDays, ChevronLeft, ChevronRight } from 'lucide-react'
+import { CalendarDays, ChevronLeft, ChevronRight, Plus } from 'lucide-react'
 import type { HubData, Material } from './lib/types'
 import { calendarDays, dayKey, materialDeadline, monthStart, parseDay } from './lib/deadlines'
 
@@ -7,7 +8,7 @@ const weekdays = ['Пн', 'Вт', 'Ср', 'Чт', 'Пт', 'Сб', 'Вс']
 const fullDate = new Intl.DateTimeFormat('ru-RU', { day: 'numeric', month: 'long', year: 'numeric', weekday: 'long' })
 const monthTitle = new Intl.DateTimeFormat('ru-RU', { month: 'long', year: 'numeric' })
 
-export function DeadlineCalendar({ data, renderMaterial }: { data: HubData; renderMaterial: (material: Material) => ReactNode }) {
+export function DeadlineCalendar({ data, renderMaterial, onAdd, editable }: { data: HubData; onAdd: (date: string) => void; editable: boolean; renderMaterial: (material: Material) => ReactNode }) {
   const [today, setToday] = useState(() => dayKey(new Date()))
   const [selected, setSelected] = useState(today)
   const [month, setMonth] = useState(() => monthStart(new Date()))
@@ -64,21 +65,21 @@ export function DeadlineCalendar({ data, renderMaterial }: { data: HubData; rend
           {days.slice(week * 7, week * 7 + 7).map(date => {
             const key = dayKey(date), items = events.get(key) || []
             const currentMonth = date.getMonth() === month.getMonth()
-            return <div role="gridcell" aria-selected={selected === key} key={key}><button
+            return <div role="gridcell" aria-selected={selected === key} key={key}><HoldButton
               ref={node => { if (node) buttons.current.set(key, node); else buttons.current.delete(key) }}
               className={`calendar-day ${currentMonth ? '' : 'other-month'} ${key === today ? 'is-today' : ''} ${key === selected ? 'is-selected' : ''}`}
-              tabIndex={key === selected ? 0 : -1} onClick={() => choose(date)} onKeyDown={event => onDayKey(event, date)}
+              onHold={editable ? () => { choose(date); onAdd(key) } : undefined} tabIndex={key === selected ? 0 : -1} onClick={() => choose(date)} onKeyDown={event => onDayKey(event, date)}
               aria-current={key === today ? 'date' : undefined} aria-label={`${fullDate.format(date)}. Событий: ${items.length}`}>
               <span>{date.getDate()}</span><span className="calendar-dots" aria-hidden="true">{items.slice(0, 3).map(material => <i key={material.id} className={`event-dot dot-${data.subjects.find(subject => subject.id === material.subject_id)?.color || 'sage'}`}/>)}</span>
-            </button></div>
+            </HoldButton></div>
           })}
         </div>)}
       </div>
       <div className="calendar-actions"><button className="button outline" onClick={() => choose(parseDay(today)!)}>Сегодня</button>{nearest && <button className="button subtle" onClick={() => choose(parseDay(nearest)!)}>К ближайшему</button>}</div>
-      <div className="calendar-note"><span className="calendar-legend-dot"/><span>Точки — материалы и объявления с дедлайном.<br/>Событий в этом месяце: {monthCount}.</span></div>
+      <div className="calendar-note"><span className="calendar-legend-dot"/><span>Точки — материалы и объявления с дедлайном.<br/>Событий в этом месяце: {monthCount}.{editable && <><br/>Зажмите дату, чтобы добавить блок.</>}</span></div>
     </section>
     <section className="deadline-day-events" aria-labelledby="selected-day-title">
-      <div className="deadline-day-heading"><div><span className="eyebrow">ВЫБРАННЫЙ ДЕНЬ</span><h2 id="selected-day-title">{fullDate.format(parseDay(selected)!)}</h2></div><span className="count-chip" aria-label={`Событий: ${selectedEvents.length}`}>{selectedEvents.length}</span></div>
+      <div className="deadline-day-heading"><div><span className="eyebrow">ВЫБРАННЫЙ ДЕНЬ</span><h2 id="selected-day-title">{fullDate.format(parseDay(selected)!)}</h2></div><div className="calendar-day-tools"><span className="count-chip" aria-label={`Событий: ${selectedEvents.length}`}>{selectedEvents.length}</span>{editable && <button className="button outline" onClick={()=>onAdd(selected)}><Plus size={16}/>Добавить</button>}</div></div>
       <div className="materials-list" key={selected}>{selectedEvents.map(renderMaterial)}</div>
       {!selectedEvents.length && <div className="empty-state"><CalendarDays size={32}/><h3>На этот день дедлайнов нет</h3><p>Выберите дату с точками. Чтобы добавить событие, укажите дедлайн при создании или редактировании блока.</p>{nearest && nearest !== selected && <button className="button outline" onClick={() => choose(parseDay(nearest)!)}>Ближайший дедлайн</button>}</div>}
     </section>

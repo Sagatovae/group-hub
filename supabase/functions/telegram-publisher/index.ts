@@ -6,6 +6,10 @@ type Part = { key: string; kind: 'text' | 'photo' | 'document'; text?: string; c
 type Receipt = { type: string; size?: number; name?: string; caption?: string }
 type Delivered = Part & { messageId: number; receipt?: Receipt }
 
+function imageFile(file?: Attachment) {
+  return !!file && (!!file.mime_type?.startsWith('image/') || /\.(png|jpe?g|webp|gif|avif)$/i.test(file.name))
+}
+
 function parts(material: Material, storageUrl: string, legacyFormat = false): Part[] {
   const hashtag = material.subject_name
     ? '#' + material.subject_name.normalize('NFKC').replace(/[^\p{L}\p{N}_]+/gu, '_').replace(/^_+|_+$/g, '').slice(0, 80)
@@ -28,12 +32,18 @@ function parts(material: Material, storageUrl: string, legacyFormat = false): Pa
       result.push({ key: `file:${i}`, kind: photo ? 'photo' : 'document', file, ...(legacyFormat ? {} : { caption }) })
     }
   }
-  const firstFile = result.find(part => part.key === 'file:0' && part.kind !== 'text')
-  if (!legacyFormat && firstFile && text.length <= 900) {
-    firstFile.caption = text
-    return result.filter(part => !part.key.startsWith('text:'))
+  // Formats Telegram cannot render as photos stay as original image files.
+  // A mixed set uses a document album, since photo/document albums cannot mix.
+  if (!legacyFormat && result.some(part => part.kind === 'document' && imageFile(part.file))) {
+    result.forEach(part => { if (part.kind === 'photo') part.kind = 'document' })
   }
-  return result
+  const firstFile = result.find(part => part.key === 'file:0' && part.kind !== 'text')
+  const output = !legacyFormat && firstFile && text.length <= 900
+    ? (firstFile.caption = text, result.filter(part => !part.key.startsWith('text:'))) : result
+  // One caption per album. Telegram accepts at most ten photos in a group.
+  const photos = output.filter(part => part.kind === 'photo' || part.kind === 'document' && imageFile(part.file))
+  if (!legacyFormat && photos.length > 1) photos.forEach((part, index) => { part.caption = index % 10 === 0 ? part.caption : '' })
+  return output
 }
 function same(a: Part, b: Part) {
   return a.kind === b.kind && a.text === b.text && a.caption === b.caption &&
@@ -61,6 +71,7 @@ Deno.serve(async request => {
   const job = claimed.data?.[0]
   if (!job) return new Response('Queue empty')
   let lastReceipt: Receipt | undefined
+  let lastAlbumIds: number[] | undefined
   const api = async (method: string, body: FormData | Record<string, unknown>, existingId?: number): Promise<number> => {
     let response: Response
     try {
@@ -85,12 +96,14 @@ Deno.serve(async request => {
       }
       throw new DeliveryError(`telegram_${value?.error_code || response.status}`, Math.max(60, value?.parameters?.retry_after || 0))
     }
-    const message = value.result
+    lastAlbumIds = method === 'sendMediaGroup' && Array.isArray(value.result)
+      ? value.result.map((message: { message_id: number }) => message.message_id) : undefined
+    const message = Array.isArray(value.result) ? value.result[0] : value.result
     if (message && typeof message === 'object') {
       lastReceipt = { type: message.document ? 'document' : message.photo ? 'photo' : 'text',
         size: message.document?.file_size, name: message.document?.file_name, caption: message.caption }
     }
-    return existingId || value.result.message_id
+    return existingId || lastAlbumIds?.[0] || value.result.message_id
   }
   const checkpoint = async (delivered: Delivered[], complete: boolean) => {
     const result = await db.rpc('checkpoint_telegram_delivery', { job_id: job.id, token: job.lease_token,
@@ -138,6 +151,29 @@ Deno.serve(async request => {
     // One Telegram mutation per invocation; keep confirmed state for unchanged parts.
     const target = wanted.find(part => !delivered.some(sent => sent.key === part.key && same(sent, part)))
     const existing = target ? delivered.find(sent => sent.key === target.key) : delivered.find(sent => !wanted.some(part => part.key === sent.key))
+    // Group new photos in one API request, while keeping every Telegram ID in
+    // the normal flat checkpoint for future edits and expiry cleanup.
+    if ((target?.kind === 'photo' || target?.kind === 'document' && imageFile(target.file)) && !existing) {
+      const group = wanted.filter(part => part.kind === target.kind && imageFile(part.file) && !delivered.some(sent => sent.key === part.key)).slice(0, 10)
+      if (group.length > 1) {
+        const blobs = await Promise.all(group.map(async part => {
+          const response = await fetch(part.file!.url, { signal: AbortSignal.timeout(45000), redirect: 'error' })
+          if (!response.ok) throw new DeliveryError('attachment_unavailable')
+          const blob = await response.blob()
+          if (blob.size > (part.kind === 'photo' ? 10 : 50) * 1024 * 1024) throw new DeliveryError('album_file_too_large')
+          return blob
+        }))
+        const form = new FormData()
+        form.set('chat_id', channel)
+        form.set('media', JSON.stringify(group.map((part, index) => ({ type: part.kind, media: `attach://photo${index}`, caption: part.caption || '' }))))
+        blobs.forEach((blob, index) => form.set(`photo${index}`, blob, group[index].file!.name))
+        await api('sendMediaGroup', form)
+        if (!lastAlbumIds || lastAlbumIds.length !== group.length || lastAlbumIds.some(id => !Number.isSafeInteger(id))) throw new DeliveryError('invalid_album_receipt', 180)
+        delivered = [...delivered, ...group.map((part, index) => ({ ...part, messageId: lastAlbumIds![index] }))]
+        await checkpoint(delivered, synchronized(wanted, delivered))
+        return new Response('Album synchronized')
+      }
+    }
     if (!target || (existing && (existing.kind === 'text') !== (target.kind === 'text'))) {
       if (existing) {
         await api('deleteMessage', { chat_id: channel, message_id: existing.messageId }, existing.messageId)

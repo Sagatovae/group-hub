@@ -1,8 +1,10 @@
+import { useLongPress } from './lib/longPress'
 import { useEffect, useRef, type ReactNode } from 'react'
 
-export function MaterialFrame({ id, label, unread, active, pinned, onRead, children }: {
-  id: string; label: string; unread: boolean; active: boolean; pinned: boolean; onRead: (ids: string[]) => void; children: ReactNode
+export function MaterialFrame({ id, label, unread, active, pinned, onRead, onHold, children }: {
+  id: string; label: string; unread: boolean; active: boolean; pinned: boolean; onRead: (ids: string[]) => void; onHold?: () => void; children: ReactNode
 }) {
+  const hold = useLongPress(onHold, true)
   const card = useRef<HTMLElement>(null)
   useEffect(() => {
     if (!unread || !active || !card.current || !('IntersectionObserver' in window)) return
@@ -21,5 +23,5 @@ export function MaterialFrame({ id, label, unread, active, pinned, onRead, child
     document.addEventListener('visibilitychange', schedule)
     return () => { clear(); observer.disconnect(); document.removeEventListener('visibilitychange', schedule) }
   }, [id, unread, active, onRead])
-  return <article ref={card} id={`material-${id}`} aria-label={label} className={`material-card ${pinned ? 'pinned' : ''} ${unread ? 'unread-material' : ''}`}>{children}</article>
+  return <article {...hold} ref={card} tabIndex={0} aria-haspopup="dialog" id={`material-${id}`} aria-label={label} className={`material-card ${pinned ? 'pinned' : ''} ${unread ? 'unread-material' : ''}`}>{children}</article>
 }

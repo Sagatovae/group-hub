@@ -41,13 +41,19 @@ Deno.serve(async request => {
       const { app } = await server()
       const jobs = await db.rpc('claim_push_deliveries')
       if (jobs.error) return new Response('Queue unavailable', { status: 503 })
-      await Promise.all((jobs.data || []).map(async (job: { id: string; subscription_id: string; lease_token: string; material_id: string; payload: unknown; attempts: number }) => {
+      await Promise.all((jobs.data || []).map(async (job: { id: string; subscription_id: string; lease_token: string; material_id: string; payload: { route?: string }; attempts: number }) => {
         const subscription = await db.from('push_subscriptions').select('subscription').eq('id', job.subscription_id).maybeSingle()
         if (subscription.error) return
         if (!subscription.data) return
         try {
           if (!endpointAllowed(subscription.data.subscription.endpoint)) throw new Error('invalid_endpoint')
-          await app.subscribe(subscription.data.subscription).pushTextMessage(JSON.stringify(job.payload), { ttl: 86400, topic: job.material_id.replace(/-/g,'') })
+          const stored = subscription.data.subscription
+          const topic = job.payload.route?.startsWith('#subject/') ? job.payload.route.split('/')[1] : 'announcements'
+          if (Array.isArray(stored.preferences?.muted_subjects) && stored.preferences.muted_subjects.includes(topic)) {
+            await db.from('push_deliveries').update({ sent_at: new Date().toISOString(), lease_until: null, last_error: 'muted_by_device' }).eq('id',job.id).eq('lease_token',job.lease_token)
+            return
+          }
+          await app.subscribe({ endpoint: stored.endpoint, keys: stored.keys }).pushTextMessage(JSON.stringify(job.payload), { ttl: 86400, topic: job.material_id.replace(/-/g,'') })
           await db.from('push_deliveries').update({ sent_at: new Date().toISOString(), lease_until: null, last_error: null }).eq('id',job.id).eq('lease_token',job.lease_token)
         } catch (error) {
           if (error instanceof PushMessageError && [404,410].includes(error.response.status)) {
@@ -84,8 +90,10 @@ Deno.serve(async request => {
       const result = await db.from('push_subscriptions').delete().eq('endpoint', sub.endpoint)
       if (result.error) throw result.error
     } else if (input.action === 'subscribe' && validKey(sub.keys?.p256dh,65) && validKey(sub.keys?.auth,16)) {
+      const muted = input.preferences?.muted_subjects
+      if (muted !== undefined && (!Array.isArray(muted) || muted.length > 200 || muted.some((item: unknown) => typeof item !== 'string' || !/^(announcements|[0-9a-f-]{36})$/i.test(item)))) return new Response('Invalid preferences', { status: 400, headers: cors })
       const result = await db.from('push_subscriptions').upsert({ endpoint: sub.endpoint,
-        subscription: { endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth } }, updated_at: new Date().toISOString(),
+        subscription: { endpoint: sub.endpoint, keys: { p256dh: sub.keys.p256dh, auth: sub.keys.auth }, preferences: { muted_subjects: [...new Set(muted || [])] } }, updated_at: new Date().toISOString(),
       }, { onConflict: 'endpoint' })
       if (result.error) throw result.error
     } else return new Response('Invalid subscription', { status: 400, headers: cors })

@@ -1,3 +1,5 @@
+import { ImageViewer } from './ImageViewer'
+import { HoldButton } from './lib/longPress'
 import { NotificationSettings } from './NotificationSettings'
 import { InstallApp } from './InstallApp'
 import { MaterialFrame } from './MaterialFrame'
@@ -13,7 +15,7 @@ import { addSubject, deleteMaterial, localFileUrl, isLocal, persistLocal, readDa
 import { AUTHORS, type Author, type Attachment, type HubData, type Material, type Page, type Section, type Subject } from './lib/types'
 import { formatDate, formatSize, matchesQuery, safeUrl, sortMaterials, moveSubject, normalizeData, isImageAttachment, hasMaterialContent, materialLabel } from './lib/utils'
 
-type Modal = { kind: 'material'; material?: Material } | { kind: 'subject'; subject?: Subject } | { kind: 'section'; section?: Section } | { kind: 'delete'; material: Material } | null
+type Modal = { kind: 'material'; material?: Material; deadline?: string } | { kind: 'subject'; subject?: Subject } | { kind: 'section'; section?: Section } | { kind: 'delete'; material: Material } | { kind: 'preview'; subject: Subject } | { kind: 'actions'; material: Material } | null
 const empty: HubData = { subjects: [], sections: [], materials: [] }
 const navItems: { page: Page; name: string; icon: typeof Bell }[] = [
   { page: 'recent', name: 'Последнее', icon: Clock3 },
@@ -26,7 +28,7 @@ function readRoute(): { page: Page; subjectId: string | null; sectionId: string 
   return { page: ['home', 'subjects', 'recent', 'deadlines'].includes(route[0]) ? route[0] as Page : 'home', subjectId: null, sectionId: 'all' }
 }
 
-function AttachmentLink({ attachment }: { attachment: Attachment }) {
+function AttachmentLink({ attachment, onPreview }: { attachment: Attachment; onPreview: () => void }) {
   const [url, setUrl] = useState<string | null>(null)
   const [imageFailed, setImageFailed] = useState(false)
   const [imageReady, setImageReady] = useState(false)
@@ -40,7 +42,7 @@ function AttachmentLink({ attachment }: { attachment: Attachment }) {
     } else setUrl(safeUrl(attachment.url))
     return () => { active = false; if (objectUrl) URL.revokeObjectURL(objectUrl) }
   }, [attachment.url])
-  return <a className={`attachment ${image ? 'image-attachment' : ''} ${!url ? 'disabled' : ''}`} href={url || undefined} target="_blank" rel="noopener noreferrer" download={attachment.url.startsWith('local-file:') ? attachment.name : undefined} aria-disabled={!url}>
+  return <a className={`attachment ${image ? 'image-attachment' : ''} ${!url ? 'disabled' : ''}`} href={url || undefined} onClick={event => { if (image && url) { event.preventDefault(); onPreview() } }} target={image ? undefined : '_blank'} rel="noopener noreferrer" download={attachment.url.startsWith('local-file:') ? attachment.name : undefined} aria-disabled={!url}>
     {image && url && <span className={`image-preview ${imageReady ? 'is-loaded' : ''}`}><img src={url} alt={attachment.name} loading="lazy" decoding="async" onLoad={() => setImageReady(true)} onError={() => setImageFailed(true)} /></span>}
     <span className="attachment-caption"><span className="file-icon"><File size={19} /></span><span><strong>{attachment.name}</strong><small>{url ? formatSize(attachment.size) : 'Файл недоступен'}</small></span><ArrowDownToLine size={17} /></span>
   </a>
@@ -90,6 +92,7 @@ export default function App() {
   const [orderBusy, setOrderBusy] = useState(false)
   const [pinningId, setPinningId] = useState<string | null>(null)
   const [notificationsOpen, setNotificationsOpen] = useState(false)
+  const [gallery, setGallery] = useState<{ images: Attachment[]; index: number } | null>(null)
   const [targetMaterial, setTargetMaterial] = useState<string | null>(null)
   const { read, markRead } = useReading()
   const { needRefresh: [needRefresh], updateServiceWorker } = useRegisterSW()
@@ -202,10 +205,10 @@ export default function App() {
   }
   const newBadge = (count: number | undefined) => count ? <span className="new-count">Новое: {count}</span> : null
 
-  const materialCard = (m: Material) => <MaterialFrame key={m.id} id={m.id} label={materialLabel(m)} pinned={m.pinned} unread={!read.has(m.id)} active={appReady && !modal && !menuOpen && !notificationsOpen} onRead={markRead}>
-    <div className="card-topline"><span className={`badge ${m.pinned ? 'important' : ''}`}>{m.pinned ? <Pin size={12} /> : <BookOpen size={12} />}{m.pinned ? 'Закреплено' : sectionName(m.section_id)}</span>{!read.has(m.id) && <span className="new-count">Новое</span>}<span className="card-date">{formatDate(m.created_at)}</span></div>
+  const materialCard = (m: Material) => <MaterialFrame key={m.id} id={m.id} label={materialLabel(m)} pinned={m.pinned} unread={!read.has(m.id)} onHold={() => openModal({kind:'actions',material:m})} active={appReady && !modal && !gallery && !menuOpen && !notificationsOpen} onRead={markRead}>
+    <div className="card-topline"><span className={`badge ${m.pinned ? 'important' : ''}`}>{m.pinned ? <Pin size={12} /> : <BookOpen size={12} />}{m.pinned ? 'Закреплено' : sectionName(m.section_id)}</span>{!read.has(m.id) && <span className="new-count">Новое</span>}<span className="card-date">{formatDate(m.created_at)}</span><button className="icon-button" aria-label={`Действия: ${materialLabel(m)}`} onClick={()=>openModal({kind:'actions',material:m})}><MoreHorizontal size={17}/></button></div>
     {m.title.trim() && <h3>{m.title}</h3>}{m.body.trim() && <p className="material-body">{m.body}</p>}
-    {!!m.attachments.length && <div className="attachments">{m.attachments.map(a => <AttachmentLink attachment={a} key={a.id} />)}</div>}
+    {!!m.attachments.length && <div className="attachments">{m.attachments.map(a => <AttachmentLink attachment={a} key={a.id} onPreview={() => { const images=m.attachments.filter(isImageAttachment); setGallery({images,index:images.findIndex(image=>image.id===a.id)}) }} />)}</div>}
     <div className="card-footer"><span className={m.author ? 'author-label' : ''}>{m.author || 'Материал группы'}</span>{(m.subject_id || page === 'recent') && <button className="subject-link" onClick={() => m.subject_id ? navigate('subject', m.subject_id, m.section_id || undefined) : navigate('home')}>{m.subject_id ? `${subjectName(m.subject_id)}${page === 'recent' ? ` · ${sectionName(m.section_id)}` : ''}` : 'Объявления группы'}<ChevronRight size={13}/></button>}{materialDeadline(m,data.sections) && <span className="deadline-badge"><CalendarDays size={13} />До {formatDate(materialDeadline(m,data.sections)!)}</span>}{editable && <div className="card-actions">{m.subject_id === null && <button className={`icon-button ${m.pinned?'selected':''}`} disabled={!!pinningId || orderBusy} onClick={() => void togglePin(m)} aria-pressed={m.pinned} aria-label={`${m.pinned?'Открепить':'Закрепить'}: ${materialLabel(m)}`}><Pin size={15}/></button>}<button className="icon-button" onClick={() => openModal({ kind: 'material', material: m })} aria-label={`Редактировать: ${materialLabel(m)}`}><Pencil size={15}/></button><button className="icon-button danger-text" onClick={() => openModal({ kind: 'delete', material: m })} aria-label={`Удалить: ${materialLabel(m)}`}><Trash2 size={15}/></button></div>}</div>
   </MaterialFrame>
 
@@ -217,7 +220,7 @@ export default function App() {
 
       <p className="nav-caption">ПРОСТРАНСТВО</p><nav aria-label="Главная навигация">{navItems.map(({ page: p, name, icon: Icon }) => <button key={p} className={`nav-item ${page === p ? 'active' : ''}`} onClick={() => navigate(p)}><Icon size={19}/><span>{name}</span></button>)}</nav>
       <div className="subject-nav-heading"><p className="nav-caption">ПРЕДМЕТЫ</p>{editable && <div className="sidebar-subject-actions">{data.subjects.length>1 && <button className={`icon-button ${reordering?'selected':''}`} onClick={()=>setReordering(!reordering)} aria-label="Изменить порядок предметов" aria-pressed={reordering}><ArrowUpDown size={15}/></button>}<button className="icon-button" onClick={()=>openModal({kind:'subject'})} aria-label="Добавить предмет"><Plus size={15}/></button></div>}</div>
-      <nav className="subjects-nav" aria-label="Предметы">{data.subjects.map((s,i) => <div className="subject-nav-row" key={s.id}><button className={`nav-item small ${subjectId===s.id?'active':''}`} onClick={()=>navigate('subject',s.id)}><span className={`subject-dot ${s.color}`}/><span className="subject-nav-name">{s.name}</span>{newBadge(unreadBySubject.get(s.id))}</button>{editable && reordering && <OrderControls subject={s} disabled={orderBusy || !!pinningId} first={i===0} last={i===data.subjects.length-1} move={direction=>void reorder(s.id,direction)}/>}</div>)}{!data.subjects.length && <span className="sidebar-empty">Предметов пока нет</span>}</nav>
+      <nav className="subjects-nav" aria-label="Предметы">{data.subjects.map((s,i) => <div className="subject-nav-row" key={s.id}><HoldButton className={`nav-item small ${subjectId===s.id?'active':''}`} onHold={()=>openModal({kind:'preview',subject:s})} onClick={()=>navigate('subject',s.id)}><span className={`subject-dot ${s.color}`}/><span className="subject-nav-name">{s.name}</span>{newBadge(unreadBySubject.get(s.id))}</HoldButton>{editable && reordering && <OrderControls subject={s} disabled={orderBusy || !!pinningId} first={i===0} last={i===data.subjects.length-1} move={direction=>void reorder(s.id,direction)}/>}</div>)}{!data.subjects.length && <span className="sidebar-empty">Предметов пока нет</span>}</nav>
 
     </aside>
     <div className="main-shell">
@@ -231,10 +234,10 @@ export default function App() {
         {page !== 'home' && <div className="page-heading"><div><div className="eyebrow">{page === 'subject' ? `ПРЕДМЕТ · ${subject?.semester || 1} СЕМЕСТР` : 'УЧЕБНОЕ ПРОСТРАНСТВО'}</div><h1>{page === 'subject' ? subject?.name || 'Предмет не найден' : page === 'recent' ? 'Последние публикации' : page === 'deadlines' ? 'Дедлайны' : 'Наши предметы'}</h1><p>{page === 'subject' ? subject?.teacher || 'Выберите предмет в меню' : page === 'recent' ? 'Объявления и материалы по всем предметам — от новых к старым.' : page === 'deadlines' ? 'Выберите день, чтобы увидеть все объявления и материалы с дедлайном.' : 'Лекции, задания и полезные материалы — у каждого предмета своё место.'}</p></div>{editable && <div className="page-actions">{page==='subject' && subject && <button className="button outline" onClick={()=>openModal({kind:'subject',subject})}><Pencil size={16}/>Редактировать предмет</button>}<button className="button primary" onClick={() => openModal(page === 'subjects' ? {kind:'subject'} : {kind:'material'})}><Plus size={18}/>{page === 'subjects' ? 'Добавить предмет' : 'Добавить блок'}</button></div>}</div>}
         {loading ? <ContentLoading subjects={page === 'subjects'}/> : <>
 
-        {page === 'deadlines' ? <DeadlineCalendar data={data} renderMaterial={materialCard}/> : page === 'subjects' ? <>
+        {page === 'deadlines' ? <DeadlineCalendar data={data} renderMaterial={materialCard} onAdd={date=>openModal({kind:'material',deadline:date})} editable={editable}/> : page === 'subjects' ? <>
           <div className="content-toolbar"><label className="search-input"><Search size={17}/><input aria-label="Поиск предметов" placeholder="Найти предмет…" value={query} onChange={e=>setQuery(e.target.value)}/></label><select aria-label="Семестр" value={semester} onChange={e=>setSemester(e.target.value)}><option value="all">Все семестры</option>{[...new Set(data.subjects.map(s=>s.semester))].sort((a,b)=>a-b).map(s=><option key={s} value={s}>{s} семестр</option>)}</select>{editable && data.subjects.length>1 && <button className={`button ${reordering?'subtle':'outline'}`} onClick={()=>setReordering(!reordering)} aria-pressed={reordering}><ArrowUpDown size={16}/>{reordering?'Готово':'Порядок'}</button>}</div>
           <div className="subject-grid">{filteredSubjects.map((s,i)=><article className="subject-card" key={s.id}>
-            <button className="subject-card-main" onClick={()=>navigate('subject',s.id)}><div className={`subject-cover ${s.color}`}><span className="subject-symbol">{['∑','</>','φ','Aa'][i%4]}</span><span className="semester-pill">{s.semester} семестр</span></div><div className="subject-card-content"><h3>{s.name}</h3>{newBadge(unreadBySubject.get(s.id))}<p>{s.teacher || 'Преподаватель не указан'}</p><div><span>{data.materials.filter(m=>m.subject_id===s.id).length} материалов</span><ArrowRight size={18}/></div></div></button>
+            <HoldButton className="subject-card-main" onHold={()=>openModal({kind:'preview',subject:s})} onClick={()=>navigate('subject',s.id)}><div className={`subject-cover ${s.color}`}><span className="subject-symbol">{['∑','</>','φ','Aa'][i%4]}</span><span className="semester-pill">{s.semester} семестр</span></div><div className="subject-card-content"><h3>{s.name}</h3>{newBadge(unreadBySubject.get(s.id))}<p>{s.teacher || 'Преподаватель не указан'}</p><div><span>{data.materials.filter(m=>m.subject_id===s.id).length} материалов</span><ArrowRight size={18}/></div></div></HoldButton>
             {editable && <div className="subject-card-actions"><button className="button outline" onClick={()=>openModal({kind:'subject',subject:s})} aria-label={`Редактировать предмет: ${s.name}`}><Pencil size={14}/>Редактировать</button>{reordering && <OrderControls subject={s} disabled={orderBusy || !!pinningId} first={i===0} last={i===filteredSubjects.length-1} move={direction=>void reorder(s.id,direction,filteredSubjects.map(x=>x.id))}/>}</div>}
           </article>)}</div>
           {!filteredSubjects.length && <div className="empty-state"><BookOpen size={32}/><h3>Предметов пока нет</h3><p>{query ? 'Попробуйте изменить запрос.' : 'Добавьте первый предмет, чтобы разместить учебные материалы.'}</p></div>}
@@ -255,10 +258,11 @@ export default function App() {
       <button className={page === 'deadlines' && !menuOpen ? 'active' : ''} aria-current={page === 'deadlines' ? 'page' : undefined} onClick={() => navigate('deadlines')}><CalendarDays size={21}/><span>Дедлайны</span></button>
       <button className={menuOpen ? 'active' : ''} aria-expanded={menuOpen} aria-controls="subject-navigation" onClick={() => setMenuOpen(!menuOpen)}><Menu size={21}/><span>Список</span></button>
     </nav>
+    {gallery && <ImageViewer images={gallery.images} initialIndex={gallery.index} close={()=>setGallery(null)}/>}
     {toast && <div className="toast" role="status"><Check size={17}/>{toast}</div>}
-    {modal && <Dialog title={modal.kind==='material' ? modal.material ? 'Редактировать блок' : 'Новый блок' : modal.kind==='subject' ? modal.subject ? 'Редактировать предмет' : 'Новый предмет' : modal.kind==='section' ? modal.section ? 'Название раздела' : 'Новый раздел' : 'Удалить блок?'} close={closeModal}>
+    {modal && <Dialog title={modal.kind==='material' ? modal.material ? 'Редактировать блок' : 'Новый блок' : modal.kind==='subject' ? modal.subject ? 'Редактировать предмет' : 'Новый предмет' : modal.kind==='section' ? modal.section ? 'Название раздела' : 'Новый раздел' : modal.kind==='preview' ? modal.subject.name : modal.kind==='actions' ? 'Действия с блоком' : 'Удалить блок?'} close={closeModal}>
       {error && <div className="error-box" role="alert">{error}</div>}
-      {modal.kind==='material' && <MaterialForm initial={modal.material} data={data} subjectId={page==='subject'?subjectId:null} sectionId={sectionId} busy={busy} busyLabel={busyLabel} cancel={closeModal} submit={(material, files)=>void run(async()=>{
+      {modal.kind==='material' && <MaterialForm key={modal.material?.id || modal.deadline || 'new'} initial={modal.material} defaultDeadline={modal.deadline} data={data} subjectId={page==='subject'?subjectId:null} sectionId={sectionId} busy={busy} busyLabel={busyLabel} cancel={closeModal} submit={(material, files)=>void run(async()=>{
         const uploaded: Attachment[] = []
         try {
           for(const [index, file] of files.entries()) { setBusyLabel(`Загружаем файл ${index + 1} из ${files.length}…`); uploaded.push(await uploadFile(file)) }
@@ -285,6 +289,8 @@ export default function App() {
       })}/>}
       {modal.kind==='section' && <form onSubmit={e=>{e.preventDefault(); const form=new FormData(e.currentTarget); const name=String(form.get('name')).trim(); if(!name) return; void run(async()=>{ if(!subjectId) return; const s: Section={id:modal.section?.id || crypto.randomUUID(),subject_id:subjectId,name,position:modal.section?.position ?? sections.length}; await saveSection(s); await changeData({...data,sections:[...data.sections.filter(x=>x.id!==s.id),s]}); setToast('Раздел сохранён') }) }}><label className="field">Название<input name="name" required maxLength={60} defaultValue={modal.section?.name} placeholder="Например, подготовка к экзамену"/></label><FormActions busy={busy} cancel={closeModal}/></form>}
 
+      {modal.kind==='preview' && <div className="subject-preview"><p className="form-note">{modal.subject.teacher || 'Преподаватель не указан'} · {modal.subject.semester} семестр</p><div className="preview-stat"><BookOpen size={20}/><strong>{data.materials.filter(m=>m.subject_id===modal.subject.id).length}</strong><span>материалов</span>{newBadge(unreadBySubject.get(modal.subject.id))}</div><div className="preview-sections">{data.sections.filter(section=>section.subject_id===modal.subject.id).sort((a,b)=>a.position-b.position).map(section=><button className="button outline" key={section.id} onClick={()=>{closeModal();navigate('subject',modal.subject.id,section.id)}}>{section.name}<span>{data.materials.filter(m=>m.section_id===section.id).length}</span></button>)}</div><h3 className="form-subheading">Последние материалы</h3><div className="preview-recent">{sortMaterials(data.materials.filter(m=>m.subject_id===modal.subject.id)).slice(0,3).map(m=><button key={m.id} onClick={()=>{closeModal();openMaterial(m)}}><strong>{materialLabel(m)}</strong><small>{sectionName(m.section_id)} · {formatDate(m.created_at)}</small><ChevronRight size={16}/></button>)}</div><div className="form-actions"><button className="button primary" onClick={()=>{closeModal();navigate('subject',modal.subject.id)}}>Открыть предмет<ArrowRight size={17}/></button></div></div>}
+      {modal.kind==='actions' && <><p className="form-note">{materialLabel(modal.material)}</p><div className="context-actions">{editable && <><button className="button outline" onClick={()=>openModal({kind:'material',material:modal.material})}><Pencil size={17}/>Редактировать блок</button>{modal.material.subject_id===null && <button className="button outline" disabled={!!pinningId} onClick={()=>{void togglePin(modal.material);closeModal()}}><Pin size={17}/>{modal.material.pinned?'Открепить':'Закрепить'}</button>}<button className="button outline danger-text" onClick={()=>openModal({kind:'delete',material:modal.material})}><Trash2 size={17}/>Удалить блок</button></>}<button className="button outline" onClick={()=>{markRead([modal.material.id]);closeModal();setToast('Отмечено прочитанным')}}><Check size={17}/>Отметить прочитанным</button></div></>}
       {modal.kind==='delete' && <><p className="form-note">Блок «{materialLabel(modal.material)}» и загруженные в него файлы будут удалены. Внешние файлы по ссылкам останутся в облаке.</p><div className="form-actions"><button className="button outline" disabled={busy} onClick={closeModal}>Отмена</button><button className="button danger" disabled={busy} onClick={()=>void run(async()=>{await deleteMaterial(modal.material.id); await changeData({...data,materials:data.materials.filter(m=>m.id!==modal.material.id)}); try{await removeFiles(modal.material.attachments);setToast('Блок удалён')}catch{setToast('Блок удалён, но файлы нужно убрать из хранилища вручную.')} })}>{busy?<LoaderCircle className="spin" size={17}/>:<Trash2 size={17}/>}Удалить блок</button></div></>}
 
     </Dialog>}
@@ -305,7 +311,7 @@ function SubjectForm({initial,nextPosition,busy,cancel,submit}:{initial?:Subject
   </form>
 }
 
-function MaterialForm({initial,data,subjectId,sectionId,busy,busyLabel,cancel,submit}:{initial?:Material;data:HubData;subjectId:string|null;sectionId:string;busy:boolean;busyLabel:string;cancel:()=>void;submit:(m:Material,files:File[])=>void}) {
+function MaterialForm({initial,defaultDeadline,data,subjectId,sectionId,busy,busyLabel,cancel,submit}:{initial?:Material;defaultDeadline?:string;data:HubData;subjectId:string|null;sectionId:string;busy:boolean;busyLabel:string;cancel:()=>void;submit:(m:Material,files:File[])=>void}) {
   const [selectedSubject,setSelectedSubject]=useState(initial?.subject_id || subjectId || '')
   const [selectedSection,setSelectedSection]=useState(initial?.section_id || (sectionId==='all'?'':sectionId))
   const [attachments,setAttachments]=useState<Attachment[]>(initial?.attachments || [])
@@ -313,7 +319,7 @@ function MaterialForm({initial,data,subjectId,sectionId,busy,busyLabel,cancel,su
   const [linkName,setLinkName]=useState('')
   const [linkUrl,setLinkUrl]=useState('')
   const [validation,setValidation]=useState('')
-  const [deadline,setDeadline]=useState(initial ? materialDeadline(initial,data.sections) || '' : '')
+  const [deadline,setDeadline]=useState(initial ? materialDeadline(initial,data.sections) || '' : defaultDeadline || '')
   const availableSections=data.sections.filter(s=>s.subject_id===selectedSubject).sort((a,b)=>a.position-b.position)
   const lecture = !!selectedSubject && isLectureSection(availableSections.find(section=>section.id===selectedSection))
   const addLink=()=>{const url=safeUrl(linkUrl);if(!url){setValidation('Введите полную ссылку, которая начинается с https:// или http://.');return}setAttachments([...attachments,{id:crypto.randomUUID(),name:linkName.trim()||new URL(url).hostname,url}]);setLinkName('');setLinkUrl('');setValidation('')}
